@@ -2,13 +2,13 @@ name: DDF Supabase Sync
 
 on:
   schedule:
-    - cron: '0 13 * * *'  # 9 AM EDT daily
+    - cron: '0 13 * * *'  # Every day at 9 AM EDT (UTC-4)
   workflow_dispatch:
 
 jobs:
   fetch-and-save:
     runs-on: ubuntu-latest
-    environment: production   # <-- Specify your environment name here
+    environment: production   # Replace 'production' with your actual environment name if different
 
     steps:
       - name: Checkout repository
@@ -21,6 +21,14 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Debug env vars length (for troubleshooting)
+        run: |
+          echo "SUPABASE_KEY length: ${#SUPABASE_KEY}"
+          echo "SUPABASE_URL length: ${#SUPABASE_URL}"
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
 
       - name: Run DDF fetch script
         run: node fetchAndSave.js
