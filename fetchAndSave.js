@@ -69,7 +69,7 @@ async function fetchOfficeDetails(token, officeKeys) {
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
+  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Haldimand-County', 'Brant', 'Brantford', 'Hagersville'];
   const filter = cities.map(city => `City eq '${city}'`).join(' or ');
   let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
 
