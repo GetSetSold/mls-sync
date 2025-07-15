@@ -152,6 +152,7 @@ function mapProperties(properties, officeDetails) {
       PostalCode: property.PostalCode,
       SubdivisionName: property.SubdivisionName,
       CommunityName: property.CommunityName,
+      Neighbourhood: property.Neighbourhood,
       UnitNumber: property.UnitNumber,
       City: property.City,
       Directions: property.Directions,
