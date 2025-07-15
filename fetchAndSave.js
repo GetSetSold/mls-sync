@@ -69,8 +69,17 @@ async function fetchOfficeDetails(token, officeKeys) {
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Haldimand-County', 'Brant', 'Brantford', 'Hagersville'];
-  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
+
+  const places = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Haldimand-County', 'Brant', 'Brantford', 'Hagersville', 'Glanbrook', 'Ryckmans'];
+  
+  const filter = places
+    .flatMap(place => [
+      `City eq '${place}'`,
+      `CommunityName eq '${place}'`,
+      `Neighbourhood eq '${place}'`
+    ])
+    .join(' or ');
+
   let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
@@ -108,6 +117,8 @@ async function fetchAndProcessDDFProperties() {
 
   console.log('Data synchronization completed.');
 }
+
+
 
 // Map properties with OfficeName
 function mapProperties(properties, officeDetails) {
