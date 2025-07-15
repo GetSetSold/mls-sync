@@ -73,17 +73,18 @@ async function fetchAndProcessDDFProperties() {
 
   const locations = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
 
-  const filterConditions = locations.flatMap(loc => [
-    `City eq '${loc}'`,
-    `CommunityName eq '${loc}'`,
-    `Neighbourhood eq '${loc}'`
-  ]).join(' or ');
+  const cityFilter = locations.map(loc => `City eq '${loc}'`).join(' or ');
+  const communityFilter = locations.map(loc => `CommunityName eq '${loc}'`).join(' or ');
+  const neighbourhoodFilter = locations.map(loc => `Neighbourhood eq '${loc}'`).join(' or ');
 
-  // ✅ Don't encode filter string
-  let nextLink = `${PROPERTY_URL}?$filter=(${filterConditions})&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
+  const fullFilter = `(${cityFilter}) or (${communityFilter}) or (${neighbourhoodFilter})`;
+
+  const nextLinkBase = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullFilter)}&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
+
+  let nextLink = decodeURIComponent(nextLinkBase);
 
   while (nextLink) {
     try {
@@ -117,6 +118,7 @@ async function fetchAndProcessDDFProperties() {
 
   console.log('Data synchronization completed.');
 }
+
 
 
 
