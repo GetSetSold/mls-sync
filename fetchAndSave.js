@@ -66,21 +66,27 @@ async function fetchOfficeDetails(token, officeKeys) {
 }
 
 
-
-// Fetch and process properties
+/ Fetch and process properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
-  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
-  let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
+
+  const locations = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
+
+  const filterConditions = locations.flatMap(loc => [
+    `City eq '${loc}'`,
+    `CommunityName eq '${loc}'`,
+    `Neighbourhood eq '${loc}'`
+  ]).join(' or ');
+
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(`(${filterConditions})`)}&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
   while (nextLink) {
     try {
-      console.log(`Fetching properties from ${nextLink}...`);
+      console.log(`Fetching properties from ${decodeURIComponent(nextLink)}...`);
       const response = await fetch(nextLink, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
@@ -93,7 +99,7 @@ async function fetchAndProcessDDFProperties() {
       const data = await response.json();
       console.log(`Fetched ${data.value.length} properties. Processing...`);
 
-      const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
+      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
       const mappedProperties = mapProperties(data.value, officeDetails);
@@ -110,6 +116,7 @@ async function fetchAndProcessDDFProperties() {
 
   console.log('Data synchronization completed.');
 }
+
 
 
 
