@@ -66,7 +66,7 @@ async function fetchOfficeDetails(token, officeKeys) {
 }
 
 
-/ Fetch and process properties
+// Fetch and process properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
