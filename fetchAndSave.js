@@ -137,6 +137,7 @@ function mapProperties(properties, officeDetails) {
       ListOfficeKey: officeKey,
       OfficeName: officeName,
       ListingKey: property.ListingKey,
+      PropertyType: property.PropertyType,
       PropertySubType: property.PropertySubType,
       TotalActualRent: property.TotalActualRent,
       NumberOfUnitsTotal: property.NumberOfUnitsTotal,
