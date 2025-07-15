@@ -79,14 +79,15 @@ async function fetchAndProcessDDFProperties() {
     `Neighbourhood eq '${loc}'`
   ]).join(' or ');
 
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(`(${filterConditions})`)}&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
+  // ✅ Don't encode filter string
+  let nextLink = `${PROPERTY_URL}?$filter=(${filterConditions})&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
   while (nextLink) {
     try {
-      console.log(`Fetching properties from ${decodeURIComponent(nextLink)}...`);
+      console.log(`Fetching properties from ${nextLink}...`);
       const response = await fetch(nextLink, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
@@ -116,7 +117,6 @@ async function fetchAndProcessDDFProperties() {
 
   console.log('Data synchronization completed.');
 }
-
 
 
 
