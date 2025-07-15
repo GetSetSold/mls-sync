@@ -69,16 +69,13 @@ async function fetchOfficeDetails(token, officeKeys) {
 
 
 // Fetch and process properties
+// Fetch and process properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-
-  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
-  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
-  const propertyTypeFilter = `PropertyType eq 1`; // Residential
-  const combinedFilter = `(${cityFilter}) and (${propertyTypeFilter})`;
-
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
+  const cities = ['Mount Hope', 'Stoney Creek'];
+  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
+  let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
