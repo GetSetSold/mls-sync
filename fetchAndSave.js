@@ -73,14 +73,12 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
+  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
   const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
-  const propertyTypeFilter = `PropertyType eq 'Residential'`;
+  const propertyTypeFilter = `PropertyType eq 1`; // Residential
+  const combinedFilter = `(${cityFilter}) and (${propertyTypeFilter})`;
 
-  // Combine city and property type filters
-  const combinedFilter = `(${cityFilter}) and ${propertyTypeFilter}`;
-
-  let nextLink = `${PROPERTY_URL}?$filter=${combinedFilter}&$top=${batchSize}`;
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
