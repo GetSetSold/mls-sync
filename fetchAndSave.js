@@ -66,31 +66,32 @@ async function fetchOfficeDetails(token, officeKeys) {
 }
 
 
+
 // Fetch and process properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Haldimand-County', 'Brant', 'Brantford', 'Hagersville'];
-  const filter = cities.map(city => City eq '${city}').join(' or ');
-  let nextLink = ${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize};
+  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
+  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
+  let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
   while (nextLink) {
     try {
-      console.log(Fetching properties from ${nextLink}...);
+      console.log(`Fetching properties from ${nextLink}...`);
       const response = await fetch(nextLink, {
         method: 'GET',
-        headers: { Authorization: Bearer ${token} },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!response.ok) {
-        throw new Error(Error fetching data: ${response.statusText});
+        throw new Error(`Error fetching data: ${response.statusText}`);
       }
 
       const data = await response.json();
-      console.log(Fetched ${data.value.length} properties. Processing...);
+      console.log(`Fetched ${data.value.length} properties. Processing...`);
 
       const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
@@ -102,13 +103,14 @@ async function fetchAndProcessDDFProperties() {
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
-      console.error(Error during fetch or processing: ${error.message}. Retrying in 5 seconds...);
+      console.error(`Error during fetch or processing: ${error.message}. Retrying in 5 seconds...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
   console.log('Data synchronization completed.');
 }
+
 
 
 
