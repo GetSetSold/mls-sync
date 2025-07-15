@@ -68,14 +68,25 @@ async function fetchOfficeDetails(token, officeKeys) {
 
 
 
-// Fetch and process properties
+
 // Fetch and process properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-  const cities = ['Mount Hope', 'Stoney Creek'];
-  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
-  let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
+
+  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 'Flamborough', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Brant', 'Paris', 'Hagersville'];
+
+  // City filter
+  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
+
+  // PropertySubType filter (targeting 'Single Family' and 'Multi-family')
+  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
+
+  // Combine filters
+  const combinedFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
+
+  // URL encode the full filter
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
@@ -110,8 +121,9 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  console.log('Data synchronization completed.');
+  console.log('✅ Data synchronization completed.');
 }
+
 
 
 
