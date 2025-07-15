@@ -71,52 +71,46 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  const locations = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
-
-  const cityFilter = locations.map(loc => `City eq '${loc}'`).join(' or ');
-  const communityFilter = locations.map(loc => `CommunityName eq '${loc}'`).join(' or ');
-  const neighbourhoodFilter = locations.map(loc => `Neighbourhood eq '${loc}'`).join(' or ');
-
-  const fullFilter = `(${cityFilter}) or (${communityFilter}) or (${neighbourhoodFilter})`;
-
-  const nextLinkBase = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullFilter)}&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
+  const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
-  let nextLink = decodeURIComponent(nextLinkBase);
+  for (const city of cities) {
+    let nextLink = `${PROPERTY_URL}?$filter=City eq '${city}'&$orderby=ModificationTimestamp desc&$top=${batchSize}`;
 
-  while (nextLink) {
-    try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+    while (nextLink) {
+      try {
+        console.log(`Fetching properties for ${city} from ${nextLink}...`);
+        const response = await fetch(nextLink, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
 
-      if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`Error fetching data: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log(`Fetched ${data.value.length} properties from ${city}.`);
+
+        const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+        const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+        const mappedProperties = mapProperties(data.value, officeDetails);
+
+        console.log('Saving properties to database...');
+        await savePropertiesToSupabase(mappedProperties);
+
+        nextLink = data['@odata.nextLink'] || null;
+      } catch (error) {
+        console.error(`Error during fetch for ${city}: ${error.message}. Retrying in 5 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during fetch or processing: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  console.log('Data synchronization completed.');
+  console.log('✅ Data synchronization completed.');
 }
 
 
