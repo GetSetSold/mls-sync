@@ -73,12 +73,7 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-   const cities = [
-    'Binbrook', 'Mount Hope', 'Hamilton',
-    'Old Hamilton', 'Glanbrook', 'Stoney Creek',
-    'Ancaster', 'Dundas', 'Caledonia', 'Cayuga',
-    'Haldimand', 'Brantford', 'Brant', 'Paris', 'Hagersville'
-  ];
+  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Hagersville'];
   const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
   const propertyTypeFilter = `PropertyType eq 'Residential'`;
 
@@ -122,6 +117,7 @@ async function fetchAndProcessDDFProperties() {
 
   console.log('Data synchronization completed.');
 }
+
 
 
 
