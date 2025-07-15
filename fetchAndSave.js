@@ -71,59 +71,43 @@ async function fetchOfficeDetails(token, officeKeys) {
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
-
   const cities = ['Binbrook', 'Hamilton', 'Caledonia', 'Cayuga', 'Haldimand', 'Haldimand-County', 'Brant', 'Brantford', 'Hagersville'];
-  const filter = cities.map(city => `City eq '${city}'`).join(' or ');
-  let nextLink = `${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize}`;
+  const filter = cities.map(city => City eq '${city}').join(' or ');
+  let nextLink = ${PROPERTY_URL}?$filter=(${filter})&$top=${batchSize};
 
-  const locationSet = new Set();
+  console.log('Deleting all existing properties in the database...');
+  await deleteAllProperties();
 
   while (nextLink) {
     try {
-      console.log(`Fetching properties from ${nextLink}...`);
+      console.log(Fetching properties from ${nextLink}...);
       const response = await fetch(nextLink, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: Bearer ${token} },
       });
 
       if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
+        throw new Error(Error fetching data: ${response.statusText});
       }
 
       const data = await response.json();
-      console.log(`Fetched ${data.value.length} listings.`);
+      console.log(Fetched ${data.value.length} properties. Processing...);
 
-      for (const property of data.value) {
-        const address = property.Address || {};
-        const city = address.City?.trim() || '';
-        const community = address.CommunityName?.trim() || '';
-        const neighbourhood = address.Neighbourhood?.trim() || '';
+      const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
+      const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
-        if (city || community || neighbourhood) {
-          const key = `${city}||${community}||${neighbourhood}`;
-          locationSet.add(key);
-        }
-      }
+      const mappedProperties = mapProperties(data.value, officeDetails);
+
+      console.log('Saving properties to database...');
+      await savePropertiesToSupabase(mappedProperties);
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
-      console.error(`Fetch error: ${error.message}. Retrying in 5 seconds...`);
+      console.error(Error during fetch or processing: ${error.message}. Retrying in 5 seconds...);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  console.log('Saving unique locations to Supabase...');
-
-  const locations = Array.from(locationSet).map(row => {
-    const [city, community, neighbourhood] = row.split('||');
-    return {
-      city,
-      community_name: community,
-      neighbourhood_name: neighbourhood,
-    };
-  });
-
-  await upsertLocationsToSupabase(locations);
   console.log('Data synchronization completed.');
 }
 
