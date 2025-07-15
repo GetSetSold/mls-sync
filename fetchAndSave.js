@@ -144,6 +144,7 @@ function mapProperties(properties, officeDetails) {
       UnparsedAddress: property.UnparsedAddress,
       PostalCode: property.PostalCode,
       SubdivisionName: property.SubdivisionName,
+      CommunityName: property.CommunityName,
       UnitNumber: property.UnitNumber,
       City: property.City,
       Directions: property.Directions,
