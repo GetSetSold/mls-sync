@@ -132,8 +132,10 @@ async function fetchAndProcessDDFProperties() {
 // Map properties with OfficeName
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
-    const officeKey = property.ListOfficeKey || 'N/A';
-    const officeName = officeDetails[officeKey] || 'Unknown Office';
+    const officeKey = property.ListOfficeKey || null; // Use null if missing
+    const officeName = officeKey && officeDetails[officeKey]
+      ? officeDetails[officeKey]
+      : null; // null if no office
 
     return {
       ListOfficeKey: officeKey,
