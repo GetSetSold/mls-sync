@@ -84,55 +84,52 @@ async function fetchAndProcessDDFProperties() {
   // PropertySubTypes to include (residential only)
   const propertySubTypes = ['Single Family', 'Multi-family', 'Townhouse'];
 
-  // Delete existing properties first
+  // Build combined filter: all cities OR CommunityName = 'Haldimand'
+  const locationFilter = `(${cities.map(c => `City eq '${c}'`).join(' or ')} or CommunityName eq 'Haldimand')`;
+
+  // Property subtype filter
+  const propertySubTypeFilter = `(${propertySubTypes.map(t => `PropertySubType eq '${t}'`).join(' or ')})`;
+
+  // Final combined filter
+  const combinedFilter = `(${locationFilter}) and ${propertySubTypeFilter}`;
+
+  // URL encode the full filter
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
+
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
-  for (const city of cities) {
-    // Build filters
-    const cityFilter = `City eq '${city}'`;
-    const communityFilter = city === 'Caledonia' || city === 'Hagersville' || city === 'Dunnville' 
-      ? `CommunityName eq 'Haldimand'` 
-      : ''; // Only for Haldimand County towns
+  while (nextLink) {
+    try {
+      console.log(`Fetching properties from ${nextLink}...`);
+      const response = await fetch(nextLink, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    const locationFilter = communityFilter ? `(${cityFilter} or ${communityFilter})` : cityFilter;
-    const propertySubTypeFilter = `(${propertySubTypes.map(type => `PropertySubType eq '${type}'`).join(' or ')})`;
-    const combinedFilter = `(${locationFilter}) and ${propertySubTypeFilter}`;
-
-    let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
-
-    while (nextLink) {
-      try {
-        console.log(`Fetching properties for ${city} from ${nextLink}...`);
-        const response = await fetch(nextLink, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Error fetching data: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        console.log(`Fetched ${data.value.length} properties for ${city}. Processing...`);
-
-        const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-        const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-        const mappedProperties = mapProperties(data.value, officeDetails);
-
-        console.log('Saving properties to database...');
-        await savePropertiesToSupabase(mappedProperties);
-
-        nextLink = data['@odata.nextLink'] || null;
-      } catch (error) {
-        console.error(`Error fetching ${city}: ${error.message}. Retrying in 5 seconds...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+      if (!response.ok) {
+        throw new Error(`Error fetching data: ${response.statusText}`);
       }
+
+      const data = await response.json();
+      console.log(`Fetched ${data.value.length} properties. Processing...`);
+
+      const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
+      const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+      const mappedProperties = mapProperties(data.value, officeDetails);
+
+      console.log('Saving properties to database...');
+      await savePropertiesToSupabase(mappedProperties);
+
+      nextLink = data['@odata.nextLink'] || null;
+    } catch (error) {
+      console.error(`Error during fetch or processing: ${error.message}. Retrying in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  console.log('✅ Data synchronization completed for all cities.');
+  console.log('✅ Data synchronization completed.');
 }
 
 
