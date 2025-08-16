@@ -69,60 +69,72 @@ async function fetchOfficeDetails(token, officeKeys) {
 
 
 
-// Fetch and process properties
+// Fetch and process DDF properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  const cities = ['Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 'Flamborough', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford', 'Brant', 'Paris', 'Hagersville'];
+  // Cities including towns in Haldimand County
+  const cities = [
+    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 
+    'Flamborough', 'Caledonia', 'Cayuga', 'Dunnville', 'Brantford', 
+    'Brant', 'Paris', 'Hagersville'
+  ];
 
-  // City filter
-  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
+  // PropertySubTypes to include (residential only)
+  const propertySubTypes = ['Single Family', 'Multi-family', 'Townhouse'];
 
-  // PropertySubType filter (targeting 'Single Family' and 'Multi-family')
-  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-
-  // Combine filters
-  const combinedFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
-
-  // URL encode the full filter
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
-
+  // Delete existing properties first
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
-  while (nextLink) {
-    try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  for (const city of cities) {
+    // Build filters
+    const cityFilter = `City eq '${city}'`;
+    const communityFilter = city === 'Caledonia' || city === 'Hagersville' || city === 'Dunnville' 
+      ? `CommunityName eq 'Haldimand'` 
+      : ''; // Only for Haldimand County towns
 
-      if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
+    const locationFilter = communityFilter ? `(${cityFilter} or ${communityFilter})` : cityFilter;
+    const propertySubTypeFilter = `(${propertySubTypes.map(type => `PropertySubType eq '${type}'`).join(' or ')})`;
+    const combinedFilter = `(${locationFilter}) and ${propertySubTypeFilter}`;
+
+    let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
+
+    while (nextLink) {
+      try {
+        console.log(`Fetching properties for ${city} from ${nextLink}...`);
+        const response = await fetch(nextLink, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Error fetching data: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log(`Fetched ${data.value.length} properties for ${city}. Processing...`);
+
+        const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+        const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+        const mappedProperties = mapProperties(data.value, officeDetails);
+
+        console.log('Saving properties to database...');
+        await savePropertiesToSupabase(mappedProperties);
+
+        nextLink = data['@odata.nextLink'] || null;
+      } catch (error) {
+        console.error(`Error fetching ${city}: ${error.message}. Retrying in 5 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties. Processing...`);
-
-      const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during fetch or processing: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  console.log('✅ Data synchronization completed.');
+  console.log('✅ Data synchronization completed for all cities.');
 }
+
 
 
 
