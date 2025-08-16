@@ -74,27 +74,19 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  // Cities including towns in Haldimand County
   const cities = [
-    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 
-    'Flamborough', 'Caledonia', 'Cayuga', 'Dunnville', 'Brantford', 
+    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
+    'Flamborough', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford',
     'Brant', 'Paris', 'Hagersville'
   ];
 
-  // PropertySubTypes to include (residential only)
-  const propertySubTypes = ['Single Family', 'Multi-family', 'Townhouse'];
+  // PropertySubType filter (residential only)
+  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
 
-  // Build combined filter: all cities OR CommunityName = 'Haldimand'
-  const locationFilter = `(${cities.map(c => `City eq '${c}'`).join(' or ')} or CommunityName eq 'Haldimand')`;
-
-  // Property subtype filter
-  const propertySubTypeFilter = `(${propertySubTypes.map(t => `PropertySubType eq '${t}'`).join(' or ')})`;
-
-  // Final combined filter
-  const combinedFilter = `(${locationFilter}) and ${propertySubTypeFilter}`;
-
-  // URL encode the full filter
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedFilter)}&$top=${batchSize}`;
+  // --- 1️⃣ Fetch by city ---
+  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
+  const combinedCityFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedCityFilter)}&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
@@ -114,7 +106,7 @@ async function fetchAndProcessDDFProperties() {
       const data = await response.json();
       console.log(`Fetched ${data.value.length} properties. Processing...`);
 
-      const officeKeys = data.value.map(property => property.ListOfficeKey).filter(Boolean);
+      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
       const mappedProperties = mapProperties(data.value, officeDetails);
@@ -124,13 +116,48 @@ async function fetchAndProcessDDFProperties() {
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
-      console.error(`Error during fetch or processing: ${error.message}. Retrying in 5 seconds...`);
+      console.error(`Error during city fetch: ${error.message}. Retrying in 5 seconds...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  console.log('✅ Data synchronization completed.');
+  // --- 2️⃣ Fetch Haldimand County by CommunityName ---
+  const haldimandFilter = `(CommunityName eq 'Haldimand') and ${propertySubTypeFilter}`;
+  nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
+
+  while (nextLink) {
+    try {
+      console.log(`Fetching Haldimand County properties by CommunityName...`);
+      const response = await fetch(nextLink, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error fetching Haldimand CommunityName: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
+
+      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+      const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+      const mappedProperties = mapProperties(data.value, officeDetails);
+
+      console.log('Saving Haldimand properties to database...');
+      await savePropertiesToSupabase(mappedProperties);
+
+      nextLink = data['@odata.nextLink'] || null;
+    } catch (error) {
+      console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+
+  console.log('✅ Data synchronization completed for all properties.');
 }
+
 
 
 
