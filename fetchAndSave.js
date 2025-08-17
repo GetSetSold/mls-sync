@@ -119,19 +119,21 @@ async function fetchAndProcessDDFProperties() {
 
   // 2️⃣ Fetch Haldimand County (covers TRREB + RAHB cases)
   const haldimandFilter = `(
-    City eq 'Haldimand' or
-    City eq 'Caledonia' or
-    City eq 'Cayuga' or
-    City eq 'Dunnville' or
-    City eq 'Hagersville' or
-    City eq 'Jarvis' or
-    City eq 'Townsend' or
-    City eq 'Fisherville' or
-    City eq 'Selkirk' or
-    CountyOrParish eq 'Haldimand'
-  ) and ${propertySubTypeFilter}`;
+  Address/City eq 'Haldimand' or
+  Address/City eq 'Caledonia' or
+  Address/City eq 'Cayuga' or
+  Address/City eq 'Dunnville' or
+  Address/City eq 'Hagersville' or
+  Address/City eq 'Jarvis' or
+  Address/City eq 'Townsend' or
+  Address/City eq 'Fisherville' or
+  Address/City eq 'Selkirk' or
+  Address/CountyOrParish eq 'Haldimand'
+) and ${propertySubTypeFilter}`;
 
-  nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
+
+ nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
+
 
   while (nextLink) {
     try {
