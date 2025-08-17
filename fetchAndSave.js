@@ -101,7 +101,7 @@ function mapProperties(properties, officeDetails) {
       UnparsedAddress: property.UnparsedAddress,
       PostalCode: property.PostalCode,
       SubdivisionName: property.SubdivisionName,
-      CommunityName: property.Address?.CommunityName || property.Neighbourhood || property.Subdivision || property.City || 'Unknown',
+      CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
       Neighbourhood: property.Neighbourhood,
       UnitNumber: property.UnitNumber,
       City: property.City,
@@ -181,54 +181,46 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  // Combine all cities including Haldimand communities
-  const allCommunities = [
+  const communities = [
+    'Haldimand', 'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis',
     'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
-    'Flamborough', 'Brantford', 'Brant', 'Paris',
-    'Haldimand', 'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis'
+    'Flamborough', 'Brantford', 'Brant', 'Paris'
   ];
 
-  // PropertySubType filter (residential only)
   const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-
-  // Construct filter: check City OR CommunityName OR Neighbourhood for all communities
-  const locationFilter = allCommunities
-    .map(name => `City eq '${name}' or CommunityName eq '${name}' or Neighbourhood eq '${name}'`)
-    .join(' or ');
-
-  const fullFilter = `(${locationFilter}) and ${propertySubTypeFilter}`;
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullFilter)}&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
 
-  while (nextLink) {
-    try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  for (const name of communities) {
+    let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(
+      `((City eq '${name}') or (CommunityName eq '${name}') or (Neighbourhood eq '${name}')) and ${propertySubTypeFilter}`
+    )}&$top=${batchSize}`;
 
-      if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
+    while (nextLink) {
+      try {
+        console.log(`Fetching properties for ${name} from ${nextLink}...`);
+        const response = await fetch(nextLink, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!response.ok) throw new Error(`Error fetching ${name}: ${response.statusText}`);
+
+        const data = await response.json();
+        console.log(`Fetched ${data.value.length} properties for ${name}. Processing...`);
+
+        const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+        const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+        const mappedProperties = mapProperties(data.value, officeDetails);
+        await savePropertiesToSupabase(mappedProperties);
+
+        nextLink = data['@odata.nextLink'] || null;
+      } catch (error) {
+        console.error(`Error fetching ${name}: ${error.message}. Retrying in 5s...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during fetch: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
