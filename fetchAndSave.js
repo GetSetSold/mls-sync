@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
+import { XMLParser } from 'fast-xml-parser';
 
 const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
@@ -16,27 +17,22 @@ const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-// Fetch access token
+// Fetch DDF access token
 async function getAccessToken() {
-  try {
-    const response = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        scope: 'DDFApi_Read',
-      }),
-    });
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      scope: 'DDFApi_Read',
+    }),
+  });
 
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
-    return data.access_token;
-  } catch (error) {
-    console.error('Error fetching access token:', error.message);
-    throw error;
-  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error_description || 'Failed to fetch token');
+  return data.access_token;
 }
 
 // Fetch unique office details
@@ -44,234 +40,135 @@ async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)];
   const officeDetails = {};
 
-  const fetchPromises = uniqueKeys.map(async (key) => {
-    try {
-      const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json();
-      if (data.value && data.value.length > 0) {
-        officeDetails[key] = data.value[0].OfficeName;
-      } else {
-        console.warn(`No office details found for OfficeKey: ${key}`);
+  await Promise.all(
+    uniqueKeys.map(async (key) => {
+      try {
+        const res = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.value?.length > 0) officeDetails[key] = data.value[0].OfficeName;
+      } catch (e) {
+        console.error(`Error fetching office ${key}:`, e.message);
       }
-    } catch (error) {
-      console.error(`Error fetching office details for OfficeKey ${key}:`, error.message);
-    }
-  });
+    })
+  );
 
-  await Promise.all(fetchPromises);
   return officeDetails;
 }
 
-// Map properties with OfficeName
-function mapProperties(properties, officeDetails) {
-  return properties.map(property => {
-    const officeKey = property.ListOfficeKey || null;
+// Map XML properties to Supabase structure
+function mapXmlProperties(properties, officeDetails) {
+  return properties.map((p) => {
+    const officeKey = p.ListOfficeKey || null;
     const officeName = officeKey && officeDetails[officeKey] ? officeDetails[officeKey] : null;
+    const address = p.Address || {};
 
     return {
       ListOfficeKey: officeKey,
       OfficeName: officeName,
-      ListingKey: property.ListingKey,
-      PropertyType: property.PropertyType,
-      PropertySubType: property.PropertySubType,
-      TotalActualRent: property.TotalActualRent,
-      NumberOfUnitsTotal: property.NumberOfUnitsTotal,
-      LotFeatures: property.LotFeatures,
-      LotSizeArea: property.LotSizeArea,
-      LotSizeDimensions: property.LotSizeDimensions,
-      LotSizeUnits: property.LotSizeUnits,
-      PoolFeatures: property.PoolFeatures,
-      CommunityFeatures: property.CommunityFeatures,
-      Appliances: property.Appliances,
-      AssociationFee: property.AssociationFee,
-      AssociationFeeIncludes: property.AssociationFeeIncludes,
-      OriginalEntryTimestamp: property.OriginalEntryTimestamp,
-      ModificationTimestamp: property.ModificationTimestamp,
-      ListingId: property.ListingId,
-      StatusChangeTimestamp: property.StatusChangeTimestamp,
-      PublicRemarks: property.PublicRemarks,
-      ListPrice: property.ListPrice,
-      OriginatingSystemName: property.OriginatingSystemName,
-      PhotosCount: property.PhotosCount,
-      PhotosChangeTimestamp: property.PhotosChangeTimestamp,
-      CommonInterest: property.CommonInterest,
-      UnparsedAddress: property.UnparsedAddress,
-      PostalCode: property.PostalCode,
-      SubdivisionName: property.SubdivisionName,
-      CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
-      Neighbourhood: property.Neighbourhood,
-      UnitNumber: property.UnitNumber,
-      City: property.City,
-      Directions: property.Directions,
-      Latitude: property.Latitude,
-      Longitude: property.Longitude,
-      CityRegion: property.CityRegion,
-      ParkingTotal: property.ParkingTotal,
-      YearBuilt: property.YearBuilt,
-      BathroomsPartial: property.BathroomsPartial,
-      BathroomsTotalInteger: property.BathroomsTotalInteger,
-      BedroomsTotal: property.BedroomsTotal,
-      BuildingAreaTotal: property.BuildingAreaTotal,
-      BuildingAreaUnits: property.BuildingAreaUnits,
-      BuildingFeatures: property.BuildingFeatures,
-      AboveGradeFinishedArea: property.AboveGradeFinishedArea,
-      BelowGradeFinishedArea: property.BelowGradeFinishedArea,
-      LivingArea: property.LivingArea,
-      FireplacesTotal: property.FireplacesTotal,
-      ArchitecturalStyle: property.ArchitecturalStyle,
-      Heating: property.Heating,
-      FoundationDetails: property.FoundationDetails,
-      Basement: property.Basement,
-      ExteriorFeatures: property.ExteriorFeatures,
-      Flooring: property.Flooring,
-      ParkingFeatures: property.ParkingFeatures,
-      Cooling: property.Cooling,
-      IrrigationSource: property.IrrigationSource,
-      WaterSource: property.WaterSource,
-      Utilities: property.Utilities,
-      Sewer: property.Sewer,
-      Roof: property.Roof,
-      ConstructionMaterials: property.ConstructionMaterials,
-      Stories: property.Stories,
-      PropertyAttachedYN: property.PropertyAttachedYN,
-      BedroomsAboveGrade: property.BedroomsAboveGrade,
-      BedroomsBelowGrade: property.BedroomsBelowGrade,
-      TaxAnnualAmount: property.TaxAnnualAmount,
-      TaxYear: property.TaxYear,
-      Media: property.Media,
-      Rooms: property.Rooms,
-      StructureType: property.StructureType,
-      ListingURL: property.ListingURL,
+      ListingKey: p.ListingKey,
+      PropertyType: p.PropertyType,
+      PropertySubType: p.PropertySubType,
+      ListPrice: p.Price || p.ListPrice,
+      CommunityName: address.CommunityName || p.City || 'Unknown',
+      City: address.City || p.City,
+      PostalCode: address.PostalCode,
+      UnitNumber: p.UnitNumber,
+      PublicRemarks: p.PublicRemarks,
+      Media: p.Media,
+      ListingURL: p.ListingURL,
+      BedroomsTotal: p.Building?.BedroomsTotal || null,
+      BathroomsTotalInteger: p.Building?.BathroomTotal || null,
+      LivingArea: p.Building?.SizeInterior || null,
+      YearBuilt: p.Building?.YearBuilt || null,
+      // Add any other fields you need
     };
   });
 }
 
-// Save properties to Supabase in batches
+// Save properties to Supabase
 async function savePropertiesToSupabase(properties) {
   const batchSize = 100;
-
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
-    try {
-      const { error } = await supabase.from('property').upsert(batch);
-      if (error) throw error;
-      console.log(`Saved batch ${i / batchSize + 1} (${batch.length} properties).`);
-    } catch (error) {
-      console.error(`Error saving batch: ${error.message}`);
-    }
+    const { error } = await supabase.from('property').upsert(batch);
+    if (error) console.error('Error saving batch:', error.message);
   }
 }
 
-// Delete all properties in the database
+// Delete all existing properties
 async function deleteAllProperties() {
-  try {
-    const { error } = await supabase.from('property').delete().neq('ListingKey', '');
-    if (error) throw error;
-    console.log('Deleted all existing properties.');
-  } catch (error) {
-    console.error('Error deleting properties:', error.message);
-  }
+  const { error } = await supabase.from('property').delete().neq('ListingKey', '');
+  if (error) console.error('Error deleting properties:', error.message);
 }
 
-// Fetch and process DDF properties
-async function fetchAndProcessDDFProperties() {
-  const token = await getAccessToken();
-  const batchSize = 50;
+// Fetch properties by city or community
+async function fetchPropertiesByLocation(token, locationField, locationName) {
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '' });
+  const batchSize = 100;
+  let offset = 1;
 
-  const otherCities = [
-    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
-    'Flamborough', 'Brantford', 'Brant', 'Paris'
-  ];
+  while (true) {
+    const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
+    const filter = encodeURIComponent(`${locationField} eq '${locationName}' and ${propertySubTypeFilter}`);
+    const url = `${PROPERTY_URL}?$filter=${filter}&$top=${batchSize}&$skip=${offset - 1}`;
 
-  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-
-  // --- 1️⃣ Fetch other cities ---
-  const cityFilter = otherCities.map(city => `City eq '${city}'`).join(' or ');
-  const combinedCityFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedCityFilter)}&$top=${batchSize}`;
-
-  console.log('Deleting all existing properties in the database...');
-  await deleteAllProperties();
-
-  while (nextLink) {
     try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/xml' } });
+      if (!res.ok) throw new Error(res.statusText);
+      const xml = await res.text();
+      const data = parser.parse(xml);
+      const properties = data?.RETS?.['RETS-RESPONSE']?.PropertyDetails ?? [];
 
-      if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
-      }
+      if (!properties || properties.length === 0) break;
 
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+      const officeKeys = properties.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
+      const mapped = mapXmlProperties(properties, officeDetails);
+      await savePropertiesToSupabase(mapped);
 
-      const mappedProperties = mapProperties(data.value, officeDetails);
+      const pagination = data?.RETS?.['RETS-RESPONSE']?.Pagination;
+      if (!pagination || parseInt(pagination.RecordsReturned) + offset > parseInt(pagination.TotalRecords)) break;
 
-      console.log('Saving properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during city fetch: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      offset += parseInt(pagination.RecordsReturned);
+    } catch (e) {
+      console.error(`Error fetching ${locationName} (${locationField}) at offset ${offset}:`, e.message);
+      await new Promise(r => setTimeout(r, 5000));
     }
   }
-
-  // --- 2️⃣ Fetch Haldimand County towns ---
-  const haldimandCommunities = ['Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis'];
-  const haldimandFilter = haldimandCommunities.map(name => `City eq '${name}'`).join(' or ');
-  const fullHaldimandFilter = `(${haldimandFilter}) and ${propertySubTypeFilter}`;
-  nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullHaldimandFilter)}&$top=${batchSize}`;
-
-  while (nextLink) {
-    try {
-      console.log(`Fetching Haldimand County properties...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error fetching Haldimand properties: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving Haldimand properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-
-  console.log('✅ Data synchronization completed for all properties.');
 }
 
 // Main function
-(async function main() {
+(async () => {
   try {
-    console.log('Starting data synchronization...');
-    await fetchAndProcessDDFProperties();
-    console.log('Data synchronization completed.');
-  } catch (error) {
-    console.error('Error in processing:', error.message);
+    console.log('Starting sync...');
+    await deleteAllProperties();
+    const token = await getAccessToken();
+
+    const locations = [
+      { field: 'City', name: 'Binbrook' },
+      { field: 'City', name: 'Mount Hope' },
+      { field: 'City', name: 'Ancaster' },
+      { field: 'City', name: 'Stoney Creek' },
+      { field: 'City', name: 'Hamilton' },
+      { field: 'City', name: 'Flamborough' },
+      { field: 'City', name: 'Caledonia' },
+      { field: 'CommunityName', name: 'Haldimand' }, // Catch Haldimand listings
+      { field: 'City', name: 'Cayuga' },
+      { field: 'City', name: 'Brantford' },
+      { field: 'City', name: 'Brant' },
+      { field: 'City', name: 'Paris' },
+      { field: 'City', name: 'Hagersville' },
+    ];
+
+    for (const loc of locations) {
+      console.log(`Fetching listings for ${loc.name} (${loc.field})...`);
+      await fetchPropertiesByLocation(token, loc.field, loc.name);
+    }
+
+    console.log('✅ All properties synced.');
+  } catch (e) {
+    console.error('Sync failed:', e.message);
   }
 })();
