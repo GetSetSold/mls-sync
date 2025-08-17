@@ -181,16 +181,15 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  const cities = [
+  const otherCities = [
     'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
     'Flamborough', 'Brantford', 'Brant', 'Paris'
   ];
 
-  // PropertySubType filter (residential only)
   const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
 
-  // --- 1️⃣ Fetch by city (excluding Haldimand) ---
-  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
+  // --- 1️⃣ Fetch other cities ---
+  const cityFilter = otherCities.map(city => `City eq '${city}'`).join(' or ');
   const combinedCityFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
   let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedCityFilter)}&$top=${batchSize}`;
 
@@ -227,18 +226,15 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  // --- 2️⃣ Fetch Haldimand County + Communities ---
-  const haldimandCommunities = ['Haldimand', 'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis'];
-  const haldimandFilter = haldimandCommunities
-    .map(name => `(City eq '${name}' or CommunityName eq '${name}' or Neighbourhood eq '${name}')`)
-    .join(' or ');
-
+  // --- 2️⃣ Fetch Haldimand County towns ---
+  const haldimandCommunities = ['Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis'];
+  const haldimandFilter = haldimandCommunities.map(name => `City eq '${name}'`).join(' or ');
   const fullHaldimandFilter = `(${haldimandFilter}) and ${propertySubTypeFilter}`;
   nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullHaldimandFilter)}&$top=${batchSize}`;
 
   while (nextLink) {
     try {
-      console.log('Fetching Haldimand County properties by City/Community/Neighbourhood...');
+      console.log(`Fetching Haldimand County properties...`);
       const response = await fetch(nextLink, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
