@@ -1,3 +1,4 @@
+// fetchAndSaveXML.js
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 import { XMLParser } from 'fast-xml-parser';
@@ -11,6 +12,7 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// DDF API credentials
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
@@ -19,30 +21,26 @@ const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 // -------------------- Fetch access token --------------------
 async function getAccessToken() {
-  try {
-    const res = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        scope: 'DDFApi_Read',
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
-    return data.access_token;
-  } catch (err) {
-    console.error('Error fetching access token:', err.message);
-    throw err;
-  }
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      scope: 'DDFApi_Read',
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
+  return data.access_token;
 }
 
 // -------------------- Fetch unique office details --------------------
 async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)];
   const officeDetails = {};
+  const parser = new XMLParser({ ignoreAttributes: false });
 
   await Promise.all(uniqueKeys.map(async (key) => {
     try {
@@ -50,9 +48,8 @@ async function fetchOfficeDetails(token, officeKeys) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const text = await res.text();
-      const parser = new XMLParser({ ignoreAttributes: false });
       const xmlData = parser.parse(text);
-      // Navigate to the OfficeName in the XML structure
+      // Navigate XML to get OfficeName
       const officeName = xmlData?.feed?.entry?.content?.Office?.OfficeName || null;
       if (officeName) officeDetails[key] = officeName;
     } catch (err) {
@@ -157,53 +154,36 @@ async function deleteAllProperties() {
   else console.log('Deleted all existing properties.');
 }
 
-// -------------------- Fetch and process properties --------------------
+// -------------------- Fetch and process DDF properties --------------------
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
-  const batchSize = 50;
-
-  const cities = [
-    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
-    'Flamborough', 'Caledonia', 'Cayuga', 'Haldimand', 'Brantford',
-    'Brant', 'Paris', 'Hagersville'
-  ];
-
-  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-
-  // --- 1️⃣ Fetch by city ---
-  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
-  let nextLink = `${PROPERTY_URL}?$filter=(${cityFilter}) and ${propertySubTypeFilter}&$top=${batchSize}&$format=xml`;
-
-  console.log('Deleting all existing properties in the database...');
-  await deleteAllProperties();
-
   const parser = new XMLParser({ ignoreAttributes: false });
 
-  while (nextLink) {
-    try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const res = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-      const text = await res.text();
-      const data = parser.parse(text);
+  // Delete old listings
+  console.log('Deleting old properties...');
+  await deleteAllProperties();
 
-      const entries = data?.feed?.entry;
-      if (!entries || entries.length === 0) break;
+  // Fetch main Property feed in XML
+  const res = await fetch(`${PROPERTY_URL}?$format=xml`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  const data = parser.parse(text);
+  const entries = data?.feed?.entry;
 
-      const officeKeys = entries.map(e => e?.content?.Property?.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mapped = mapProperties(entries.map(e => e.content.Property), officeDetails);
-      await savePropertiesToSupabase(mapped);
-
-      // Handle nextLink from XML if exists (optional, depends on DDF XML)
-      nextLink = null; // Stop loop if pagination not implemented in XML
-    } catch (err) {
-      console.error('Error fetching properties:', err.message);
-      await new Promise(r => setTimeout(r, 5000));
-    }
+  if (!entries || entries.length === 0) {
+    console.log('No property entries found.');
+    return;
   }
 
-  console.log('✅ XML data synchronization completed.');
+  const propertiesRaw = entries.map(e => e.content.Property);
+  const officeKeys = propertiesRaw.map(p => p.ListOfficeKey).filter(Boolean);
+  const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+  const mappedProperties = mapProperties(propertiesRaw, officeDetails);
+  await savePropertiesToSupabase(mappedProperties);
+
+  console.log('✅ XML DDF data synchronization completed.');
 }
 
 // -------------------- Main --------------------
