@@ -70,22 +70,17 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  // Expanded list of cities to fully cover Haldimand County
-  const cities = [
-    // Hamilton & surrounding
-    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton', 'Flamborough',
-    // Brant/Brantford
-    'Brantford', 'Brant', 'Paris',
-    // Haldimand County
-    'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville',
-    'Jarvis', 'Townsend', 'Fisherville', 'Selkirk'
+  // Other surrounding cities
+  const otherCities = [
+    'Binbrook', 'Mount Hope', 'Ancaster', 'Stoney Creek', 'Hamilton',
+    'Flamborough', 'Brantford', 'Brant', 'Paris'
   ];
 
   // PropertySubType filter (residential only)
   const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
 
-  // Build city filter
-  const cityFilter = cities.map(city => `City eq '${city}'`).join(' or ');
+  // 1️⃣ Fetch by city (non-Haldimand)
+  const cityFilter = otherCities.map(city => `City eq '${city}'`).join(' or ');
   const combinedCityFilter = `(${cityFilter}) and ${propertySubTypeFilter}`;
   let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(combinedCityFilter)}&$top=${batchSize}`;
 
@@ -118,6 +113,52 @@ async function fetchAndProcessDDFProperties() {
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
       console.error(`Error during city fetch: ${error.message}. Retrying in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+
+  // 2️⃣ Fetch Haldimand County (covers TRREB + RAHB cases)
+  const haldimandFilter = `(
+    City eq 'Haldimand' or
+    City eq 'Caledonia' or
+    City eq 'Cayuga' or
+    City eq 'Dunnville' or
+    City eq 'Hagersville' or
+    City eq 'Jarvis' or
+    City eq 'Townsend' or
+    City eq 'Fisherville' or
+    City eq 'Selkirk' or
+    CountyOrParish eq 'Haldimand'
+  ) and ${propertySubTypeFilter}`;
+
+  nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
+
+  while (nextLink) {
+    try {
+      console.log(`Fetching Haldimand County properties...`);
+      const response = await fetch(nextLink, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error fetching Haldimand data: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
+
+      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+      const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+      const mappedProperties = mapProperties(data.value, officeDetails);
+
+      console.log('Saving Haldimand properties to database...');
+      await savePropertiesToSupabase(mappedProperties);
+
+      nextLink = data['@odata.nextLink'] || null;
+    } catch (error) {
+      console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
