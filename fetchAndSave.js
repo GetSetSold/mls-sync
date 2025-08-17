@@ -77,7 +77,7 @@ async function fetchAndProcessDDFProperties() {
     // Brant/Brantford
     'Brantford', 'Brant', 'Paris',
     // Haldimand County
-    'Haldimand', 'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville',
+    'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville',
     'Jarvis', 'Townsend', 'Fisherville', 'Selkirk'
   ];
 
