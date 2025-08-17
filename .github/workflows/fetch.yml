@@ -1,4 +1,4 @@
-name: DDF Supabase XML Sync
+name: DDF Supabase Sync
 
 on:
   schedule:
@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  fetch-and-save-xml:
+  fetch-and-save:
     runs-on: ubuntu-latest
-    environment: production   # Replace with your actual environment name if different
+    environment: production   # Replace 'production' with your actual environment name if different
 
     steps:
       - name: Checkout repository
@@ -20,7 +20,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install node-fetch @supabase/supabase-js fast-xml-parser
+        run: npm install
 
       - name: Debug env vars length (for troubleshooting)
         run: |
@@ -30,8 +30,8 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
 
-      - name: Run DDF XML fetch script
-        run: node fetchAndSaveXML.js
+      - name: Run DDF fetch script
+        run: node fetchAndSave.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
