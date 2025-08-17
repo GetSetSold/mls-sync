@@ -12,7 +12,8 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // URL of the XML feed
-const XML_URL = 'https://ddfapi.realtor.ca/odata/v1/$metadata'; // replace with actual XML endpoint
+const XML_URL = 'https://ddfapi.realtor.ca/odata/v1/$metadata
+'; // replace with actual XML endpoint
 
 // Fetch and parse XML
 async function fetchXMLData() {
