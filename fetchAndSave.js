@@ -117,53 +117,49 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  // 2️⃣ Fetch Haldimand County (covers TRREB + RAHB cases)
-  const haldimandFilter = `(
-  Address/City eq 'Haldimand' or
-  Address/City eq 'Caledonia' or
-  Address/City eq 'Cayuga' or
-  Address/City eq 'Dunnville' or
-  Address/City eq 'Hagersville' or
-  Address/City eq 'Jarvis' or
-  Address/City eq 'Townsend' or
-  Address/City eq 'Fisherville' or
-  Address/City eq 'Selkirk' or
-  Address/CountyOrParish eq 'Haldimand'
-) and ${propertySubTypeFilter}`;
+  // --- 2️⃣ Fetch Haldimand County and communities ---
+const haldimandCommunities = [
+  'Haldimand', 'Caledonia', 'Cayuga', 'Dunnville', 'Hagersville', 'Jarvis'
+];
 
+// Construct filter: check City OR CommunityName OR Neighbourhood
+const haldimandFilter = haldimandCommunities
+  .map(name => `City eq '${name}' or CommunityName eq '${name}' or Neighbourhood eq '${name}'`)
+  .join(' or ');
 
- nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
+const fullHaldimandFilter = `(${haldimandFilter}) and ${propertySubTypeFilter}`;
+let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(fullHaldimandFilter)}&$top=${batchSize}`;
 
+while (nextLink) {
+  try {
+    console.log(`Fetching Haldimand County properties by City/Community/Neighbourhood...`);
+    const response = await fetch(nextLink, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-  while (nextLink) {
-    try {
-      console.log(`Fetching Haldimand County properties...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error fetching Haldimand data: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving Haldimand properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
+    if (!response.ok) {
+      throw new Error(`Error fetching Haldimand properties: ${response.statusText}`);
     }
+
+    const data = await response.json();
+    console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
+
+    const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+    const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+    const mappedProperties = mapProperties(data.value, officeDetails);
+
+    console.log('Saving Haldimand properties to database...');
+    await savePropertiesToSupabase(mappedProperties);
+
+    nextLink = data['@odata.nextLink'] || null;
+  } catch (error) {
+    console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
   }
+}
+
 
   console.log('✅ Data synchronization completed for all properties.');
 }
