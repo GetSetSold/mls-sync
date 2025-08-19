@@ -4,7 +4,9 @@ import fetch from 'node-fetch';
 const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
+if (!supabaseKey) {
+  throw new Error('❌ Missing SUPABASE_KEY environment variable');
+}
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -14,12 +16,9 @@ const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-const batchSize = 50;
+const batchSize = 50; // CREA max recommended is small, don't overload API
 
-// Helper: unique sorted array
-const uniqueSorted = arr => [...new Set(arr)].sort();
-
-// --- 1️⃣ Get DDF access token
+// 🔑 Get CREA DDF Access Token
 async function getAccessToken() {
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -31,32 +30,35 @@ async function getAccessToken() {
       scope: 'DDFApi_Read',
     }),
   });
+
   const data = await response.json();
   if (!response.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
   return data.access_token;
 }
 
-// --- 2️⃣ Fetch office details
+// 🏢 Fetch Office Details (optional lookup)
 async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)];
   const officeDetails = {};
 
-  await Promise.all(uniqueKeys.map(async key => {
+  await Promise.all(uniqueKeys.map(async (key) => {
     try {
       const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
-      if (data.value && data.value.length) officeDetails[key] = data.value[0].OfficeName;
+      if (data.value && data.value.length > 0) {
+        officeDetails[key] = data.value[0].OfficeName;
+      }
     } catch (error) {
-      console.error(`Error fetching office details for OfficeKey ${key}:`, error.message);
+      console.error(`⚠️ Error fetching office ${key}:`, error.message);
     }
   }));
 
   return officeDetails;
 }
 
-// --- 3️⃣ Map properties
+// 🏠 Map Properties
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
@@ -140,80 +142,79 @@ function mapProperties(properties, officeDetails) {
   });
 }
 
-// --- 4️⃣ Save properties in batches
+// 💾 Save to Supabase in Batches
 async function savePropertiesToSupabase(properties) {
   for (let i = 0; i < properties.length; i += 100) {
     const batch = properties.slice(i, i + 100);
     try {
       const { error } = await supabase.from('property').upsert(batch);
       if (error) throw error;
-      console.log(`Saved batch ${i / 100 + 1} (${batch.length} properties).`);
+      console.log(`✅ Saved batch ${i / 100 + 1} (${batch.length} properties).`);
     } catch (error) {
-      console.error(`Error saving batch: ${error.message}`);
+      console.error(`❌ Error saving batch: ${error.message}`);
     }
   }
 }
 
-// --- 5️⃣ Fetch all Ontario listings and process
+// 🔄 Fetch ALL Ontario Listings & Sync
 async function fetchAndProcessOntarioProperties() {
   const token = await getAccessToken();
-  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-  const ontarioFilter = `(Province eq 'ON') and ${propertySubTypeFilter}`;
+  const filter = `(Province eq 'ON') and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
 
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(ontarioFilter)}&$top=${batchSize}`;
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(filter)}&$top=${batchSize}`;
   let allFetchedProperties = [];
 
   while (nextLink) {
     try {
-      console.log(`Fetching properties from: ${nextLink}`);
+      console.log(`📥 Fetching: ${nextLink}`);
       const response = await fetch(nextLink, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error(`Fetch error: ${response.statusText}`);
 
       const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties.`);
+      console.log(`➡️ Got ${data.value.length} properties`);
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
-      const mappedProperties = mapProperties(data.value, officeDetails);
-      allFetchedProperties.push(...mappedProperties);
+      const mapped = mapProperties(data.value, officeDetails);
+      allFetchedProperties.push(...mapped);
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
-      console.error(`Error fetching Ontario properties: ${error.message}. Retrying in 5s...`);
+      console.error(`⚠️ Fetch error: ${error.message} — retrying in 5s`);
       await new Promise(r => setTimeout(r, 5000));
     }
   }
 
-  console.log(`Total fetched Ontario properties: ${allFetchedProperties.length}`);
+  console.log(`📊 Total fetched Ontario properties: ${allFetchedProperties.length}`);
 
-  // --- 6️⃣ Delete expired listings
-  const feedMLS = allFetchedProperties.map(p => p.ListingKey);
+  // 🗑️ Remove expired listings
+  const feedKeys = allFetchedProperties.map(p => p.ListingKey);
   const { data: dbListings } = await supabase.from('property').select('ListingKey');
-  const dbMLS = dbListings.map(l => l.ListingKey);
-  const expiredMLS = dbMLS.filter(m => !feedMLS.includes(m));
+  const dbKeys = dbListings?.map(l => l.ListingKey) || [];
+  const expired = dbKeys.filter(m => !feedKeys.includes(m));
 
-  if (expiredMLS.length > 0) {
-    console.log(`Deleting ${expiredMLS.length} expired listings...`);
-    await supabase.from('property').delete().in('ListingKey', expiredMLS);
+  if (expired.length > 0) {
+    console.log(`🗑️ Deleting ${expired.length} expired listings...`);
+    await supabase.from('property').delete().in('ListingKey', expired);
   }
 
-  // --- 7️⃣ Upsert new and updated listings
-  console.log('Upserting fetched listings...');
+  // 💾 Save new & updated
+  console.log('💾 Upserting listings...');
   await savePropertiesToSupabase(allFetchedProperties);
 
-  console.log('✅ Ontario property sync complete.');
+  console.log('✅ Ontario sync complete.');
 }
 
-// --- 8️⃣ Main function
+// 🚀 Main
 (async function main() {
   try {
-    console.log('Starting Ontario property sync...');
+    console.log('🔄 Starting Ontario sync...');
     await fetchAndProcessOntarioProperties();
-    console.log('Ontario property sync finished successfully.');
+    console.log('🎉 Finished.');
   } catch (error) {
-    console.error('Error in Ontario property sync:', error.message);
+    console.error('❌ Sync failed:', error.message);
   }
 })();
