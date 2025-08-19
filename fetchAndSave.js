@@ -69,15 +69,15 @@ async function fetchOfficeDetails(token, officeKeys) {
 
 
 
+
 // Fetch and process DDF properties
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
   // Filter for all Ontario residential properties
-const provinceFilter = `(Province eq 'Ontario') and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(provinceFilter)}&$top=${batchSize}`;
-
+  const provinceFilter = `(Province eq 'Ontario') and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(provinceFilter)}&$top=${batchSize}`;
 
   console.log('Deleting all existing properties in the database...');
   await deleteAllProperties();
