@@ -1,23 +1,23 @@
-// fetchAndSave.js
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://nkjxlwuextxzpeohutxz.supabase.co';
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
-if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
+
+if (!supabaseKey) {
+  throw new Error('Missing SUPABASE_KEY environment variable');
+}
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const TOKEN_URL   = 'https://identity.crea.ca/connect/token';
-const CLIENT_ID   = '***PURGED-DDF-CLIENT-ID***';
+const TOKEN_URL = 'https://identity.crea.ca/connect/token';
+const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
-const PROPERTY_URL  = 'https://ddfapi.realtor.ca/odata/v1/Property';
-const OFFICE_URL    = 'https://ddfapi.realtor.ca/odata/v1/Office';
+const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
+const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
+const batchSize = 50;
 
-const PAGE_SIZE = 50;         // keep small to be gentle with DDF
-const UPSERT_BATCH = 100;     // Supabase upsert chunk size
-
-// 1) Access token
+// --- 1️⃣ Get DDF access token
 async function getAccessToken() {
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -29,39 +29,42 @@ async function getAccessToken() {
       scope: 'DDFApi_Read',
     }),
   });
+
   const data = await response.json();
   if (!response.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
   return data.access_token;
 }
 
-// 2) Office details (per page to avoid n+1 cost across entire province)
+// --- 2️⃣ Fetch office details
 async function fetchOfficeDetails(token, officeKeys) {
-  const uniqueKeys = [...new Set((officeKeys || []).filter(Boolean))];
+  const uniqueKeys = [...new Set(officeKeys)];
   const officeDetails = {};
-  await Promise.all(uniqueKeys.map(async key => {
+
+  await Promise.all(uniqueKeys.map(async (key) => {
     try {
-      const res = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
+      const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const json = await res.json();
-      if (json?.value?.length) officeDetails[key] = json.value[0].OfficeName || null;
-    } catch (e) {
-      console.error(`Office lookup failed for ${key}:`, e.message);
+      const data = await response.json();
+      if (data.value && data.value.length > 0) officeDetails[key] = data.value[0].OfficeName;
+    } catch (error) {
+      console.error(`Error fetching office ${key}:`, error.message);
     }
   }));
+
   return officeDetails;
 }
 
-// 3) EXACT field mapping to your property table
+// --- 3️⃣ Map properties
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
     const officeName = officeKey && officeDetails[officeKey] ? officeDetails[officeKey] : null;
 
     return {
+      ListingKey: property.ListingKey,
       ListOfficeKey: officeKey,
       OfficeName: officeName,
-      ListingKey: property.ListingKey,
       PropertyType: property.PropertyType,
       PropertySubType: property.PropertySubType,
       TotalActualRent: property.TotalActualRent,
@@ -132,132 +135,71 @@ function mapProperties(properties, officeDetails) {
       Rooms: property.Rooms,
       StructureType: property.StructureType,
       ListingURL: property.ListingURL,
-      // add any other columns you physically have in Supabase if needed
     };
   });
 }
 
-// 4) Upsert in batches and count new/updated
-async function upsertPropertiesBatched(rows) {
-  let added = 0, updated = 0;
-  for (let i = 0; i < rows.length; i += UPSERT_BATCH) {
-    const batch = rows.slice(i, i + UPSERT_BATCH);
-    const keys = batch.map(r => r.ListingKey);
-
-    // find existing keys for this batch
-    const { data: existing, error: selErr } = await supabase
-      .from('property')
-      .select('ListingKey')
-      .in('ListingKey', keys);
-    if (selErr) {
-      console.error('Select existing error:', selErr.message);
-    }
-    const existingSet = new Set((existing || []).map(r => r.ListingKey));
-    added += batch.filter(r => !existingSet.has(r.ListingKey)).length;
-    updated += batch.filter(r => existingSet.has(r.ListingKey)).length;
-
-    const { error } = await supabase
-      .from('property')
-      .upsert(batch, { onConflict: 'ListingKey' });
+// --- 4️⃣ Save properties in batches
+async function savePropertiesToSupabase(properties) {
+  const batch = 100;
+  for (let i = 0; i < properties.length; i += batch) {
+    const slice = properties.slice(i, i + batch);
+    const { error } = await supabase.from('property').upsert(slice);
     if (error) console.error('Upsert error:', error.message);
-    else console.log(`Upserted ${batch.length} (page chunk)`);
+    else console.log(`Saved batch ${i/batch+1} (${slice.length} properties)`);
   }
-  return { added, updated };
 }
 
-// 5) Get all ListingKeys currently in DB (paged)
-async function getAllDbListingKeys() {
-  const CHUNK = 1000;
-  let from = 0;
-  let all = [];
-  while (true) {
-    const to = from + CHUNK - 1;
-    const { data, error } = await supabase
-      .from('property')
-      .select('ListingKey')
-      .range(from, to);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data.map(r => r.ListingKey));
-    if (data.length < CHUNK) break;
-    from += CHUNK;
+// --- 5️⃣ Delete expired listings
+async function deleteExpiredListings(feedListingKeys) {
+  const { data: dbListings } = await supabase.from('property').select('ListingKey');
+  const dbKeys = dbListings.map(l => l.ListingKey);
+  const expiredKeys = dbKeys.filter(k => !feedListingKeys.includes(k));
+  if (expiredKeys.length > 0) {
+    await supabase.from('property').delete().in('ListingKey', expiredKeys);
+    console.log(`Deleted ${expiredKeys.length} expired listings`);
   }
-  return all;
 }
 
-// 6) Fetch ALL Ontario listings and sync
-async function fetchAndSyncOntario() {
+// --- 6️⃣ Fetch all ON listings and process
+async function fetchAndProcessOntarioProperties() {
   const token = await getAccessToken();
-
-  // DDF sometimes uses 'ON' or 'Ontario' → handle both.
-  const propertySubTypeFilter =
-    "(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')";
-  const provinceFilter =
-    "((Province eq 'ON') or (Province eq 'Ontario'))";
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(`${provinceFilter} and ${propertySubTypeFilter}`)}&$top=${PAGE_SIZE}`;
-
-  const feedKeys = new Set();
-  let totalFetched = 0;
-  let added = 0, updated = 0;
+  const ontarioFilter = `(Province eq 'ON') and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
+  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(ontarioFilter)}&$top=${batchSize}`;
+  let allProperties = [];
 
   while (nextLink) {
-    console.log('Fetching:', nextLink);
-    const res = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`Fetch error: ${res.status} ${res.statusText}`);
-    const json = await res.json();
+    const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Fetch error: ${response.statusText}`);
+    const data = await response.json();
 
-    const page = json?.value || [];
-    totalFetched += page.length;
-    console.log(`Fetched ${page.length} listings (running total: ${totalFetched})`);
-
-    // Feed keys
-    page.forEach(p => { if (p.ListingKey) feedKeys.add(p.ListingKey); });
-
-    // Office lookup for this page
-    const officeKeys = page.map(p => p.ListOfficeKey).filter(Boolean);
+    const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
     const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
-    // Map and upsert this page
-    const mapped = mapProperties(page, officeDetails);
-    const counts = await upsertPropertiesBatched(mapped);
-    added += counts.added;
-    updated += counts.updated;
+    const mapped = mapProperties(data.value, officeDetails);
+    allProperties.push(...mapped);
 
-    nextLink = json['@odata.nextLink'] || null;
+    nextLink = data['@odata.nextLink'] || null;
+    console.log(`Fetched ${mapped.length} properties, total so far: ${allProperties.length}`);
   }
 
-  console.log(`Total fetched Ontario properties: ${totalFetched}`);
+  // Delete expired listings
+  const feedKeys = allProperties.map(p => p.ListingKey);
+  await deleteExpiredListings(feedKeys);
 
-  // Delete expired (missing from feed)
-  const dbKeys = await getAllDbListingKeys();
-  const toDelete = dbKeys.filter(k => !feedKeys.has(k));
-  let deleted = 0;
-  if (toDelete.length) {
-    console.log(`Deleting ${toDelete.length} expired listings...`);
-    // delete in chunks
-    const CHUNK = 1000;
-    for (let i = 0; i < toDelete.length; i += CHUNK) {
-      const chunk = toDelete.slice(i, i + CHUNK);
-      const { error } = await supabase.from('property').delete().in('ListingKey', chunk);
-      if (error) {
-        console.error('Delete error:', error.message);
-      } else {
-        deleted += chunk.length;
-      }
-    }
-  }
+  // Upsert new/updated listings
+  await savePropertiesToSupabase(allProperties);
 
-  console.log(`✅ Sync summary → Added: ${added}, Updated: ${updated}, Deleted: ${deleted}, TotalSeenToday: ${feedKeys.size}`);
+  console.log('✅ Ontario property sync complete.');
 }
 
-// 7) Main
+// --- 7️⃣ Main
 (async function main() {
   try {
-    console.log('Starting Ontario daily sync…');
-    await fetchAndSyncOntario();
-    console.log('Done.');
+    console.log('Starting Ontario property sync...');
+    await fetchAndProcessOntarioProperties();
+    console.log('Ontario property sync finished successfully.');
   } catch (err) {
-    console.error('Fatal error:', err?.message || err);
-    process.exit(1);
+    console.error('Error in Ontario property sync:', err.message);
   }
 })();
