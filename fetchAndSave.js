@@ -51,13 +51,9 @@ async function fetchOfficeDetails(token, officeKeys) {
   return officeDetails;
 }
 
-// Map properties (filter residential)
+// Map properties for Supabase
 function mapProperties(properties, officeDetails) {
-  const filtered = properties.filter(
-    p => p.PropertySubType === 'Single Family' || p.PropertySubType === 'Multi-family'
-  );
-
-  return filtered.map(property => {
+  return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
     const officeName = officeKey ? officeDetails[officeKey] || null : null;
 
@@ -139,8 +135,7 @@ function mapProperties(properties, officeDetails) {
   });
 }
 
-
-// Save properties to Supabase in batches
+// Save properties in Supabase
 async function savePropertiesToSupabase(properties) {
   const batchSize = 100;
   for (let i = 0; i < properties.length; i += batchSize) {
@@ -151,20 +146,21 @@ async function savePropertiesToSupabase(properties) {
   }
 }
 
-// Delete all existing properties
-async function deleteAllProperties() {
-  const { error } = await supabase.from('property').delete().neq('ListingKey', '');
-  if (error) console.error('Error deleting properties:', error.message);
-  else console.log('Deleted all existing properties');
+// Delete Supabase properties not in the latest fetch
+async function deleteNonMatchingProperties(listingKeys) {
+  const { error } = await supabase
+    .from('property')
+    .delete()
+    .not('ListingKey', 'in', listingKeys);
+  if (error) console.error('Error deleting non-matching properties:', error.message);
+  else console.log('Deleted properties not in the latest fetch');
 }
 
-// Fetch and process properties from DDF
+// Fetch and process DDF properties incrementally
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   let nextLink = `${PROPERTY_URL}?$top=100`;
-
-  console.log('Deleting existing properties...');
-  await deleteAllProperties();
+  const allFetchedKeys = [];
 
   while (nextLink) {
     try {
@@ -179,9 +175,10 @@ async function fetchAndProcessDDFProperties() {
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
       const mappedProperties = mapProperties(data.value, officeDetails);
-      console.log(`Filtered to ${mappedProperties.length} residential properties`);
-
       await savePropertiesToSupabase(mappedProperties);
+
+      // Track ListingKeys for deletion logic
+      allFetchedKeys.push(...mappedProperties.map(p => `'${p.ListingKey}'`));
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
@@ -190,13 +187,16 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  console.log('✅ DDF Ontario residential property sync complete');
+  // Delete properties that are no longer in DDF
+  if (allFetchedKeys.length > 0) await deleteNonMatchingProperties(allFetchedKeys);
+
+  console.log('✅ DDF incremental sync complete');
 }
 
 // Main
 (async function main() {
   try {
-    console.log('Starting DDF property sync...');
+    console.log('Starting incremental DDF property sync...');
     await fetchAndProcessDDFProperties();
   } catch (error) {
     console.error('Fatal error:', error.message);
