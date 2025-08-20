@@ -4,19 +4,17 @@ import fetch from 'node-fetch';
 const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseKey) {
-  throw new Error('Missing SUPABASE_KEY environment variable');
-}
+if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
-const PROPERTY_URL = `https://ddfapi.realtor.ca/odata/v1/Property?$filter=Province eq 'Ontario'`;
+const PROPERTY_URL = `https://ddfapi.realtor.ca/odata/v1/Property?$filter=Province eq 'Ontario' and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-// Fetch access token
+// --- 1️⃣ Fetch DDF access token ---
 async function getAccessToken() {
   try {
     const response = await fetch(TOKEN_URL, {
@@ -29,7 +27,6 @@ async function getAccessToken() {
         scope: 'DDFApi_Read',
       }),
     });
-
     const data = await response.json();
     if (!response.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
     return data.access_token;
@@ -39,100 +36,32 @@ async function getAccessToken() {
   }
 }
 
-// Fetch unique office details
+// --- 2️⃣ Fetch office details ---
 async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)];
   const officeDetails = {};
 
-  const fetchPromises = uniqueKeys.map(async (key) => {
+  await Promise.all(uniqueKeys.map(async key => {
     try {
       const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
-      if (data.value && data.value.length > 0) {
-        officeDetails[key] = data.value[0].OfficeName;
-      } else {
-        console.warn(`No office details found for OfficeKey: ${key}`);
-      }
+      if (data.value && data.value.length > 0) officeDetails[key] = data.value[0].OfficeName;
     } catch (error) {
-      console.error(`Error fetching office details for OfficeKey ${key}:`, error.message);
+      console.error(`Error fetching office ${key}:`, error.message);
     }
-  });
+  }));
 
-  await Promise.all(fetchPromises);
   return officeDetails;
 }
 
-
-
-
-
-// Fetch and process DDF properties
-async function fetchAndProcessDDFProperties() {
-  const token = await getAccessToken();
-  const batchSize = 50;
-
-  // PropertySubType filter (residential only)
-  const propertySubTypeFilter = `(PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
-
-  // Province filter for Ontario
-  const provinceFilter = `(Province eq 'Ontario') and ${propertySubTypeFilter}`;
-
-  // Start with top batch
-  let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(provinceFilter)}&$top=${batchSize}`;
-
-  console.log('Deleting all existing properties in the database...');
-  await deleteAllProperties();
-
-  while (nextLink) {
-    try {
-      console.log(`Fetching properties from ${nextLink}...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error fetching data: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error fetching Ontario properties: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-
-  console.log('✅ Data synchronization completed for all Ontario properties.');
-}
-
-
-
-
-
-
-
-
-// Map properties with OfficeName
+// --- 3️⃣ Map properties ---
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
-    const officeKey = property.ListOfficeKey || null; // Use null if missing
-    const officeName = officeKey && officeDetails[officeKey]
-      ? officeDetails[officeKey]
-      : null; // null if no office
+    const officeKey = property.ListOfficeKey || null;
+    const officeName = officeKey ? officeDetails[officeKey] || null : null;
 
     return {
       ListOfficeKey: officeKey,
@@ -212,40 +141,74 @@ function mapProperties(properties, officeDetails) {
   });
 }
 
-// Save properties to Supabase in batches
+// --- 4️⃣ Save to Supabase ---
 async function savePropertiesToSupabase(properties) {
   const batchSize = 100;
-
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
     try {
       const { error } = await supabase.from('property').upsert(batch);
       if (error) throw error;
-      console.log(`Saved batch ${i / batchSize + 1} (${batch.length} properties).`);
+      console.log(`Saved batch ${i / batchSize + 1} (${batch.length} properties)`);
     } catch (error) {
-      console.error(`Error saving batch: ${error.message}`);
+      console.error('Error saving batch:', error.message);
     }
   }
 }
 
-// Delete all properties in the database
+// --- 5️⃣ Delete existing properties ---
 async function deleteAllProperties() {
   try {
     const { error } = await supabase.from('property').delete().neq('ListingKey', '');
     if (error) throw error;
-    console.log('Deleted all existing properties.');
+    console.log('Deleted all existing properties');
   } catch (error) {
     console.error('Error deleting properties:', error.message);
   }
 }
 
-// Main function
+// --- 6️⃣ Fetch & process all Ontario properties ---
+async function fetchAndProcessDDFProperties() {
+  const token = await getAccessToken();
+  const batchSize = 50;
+  let nextLink = `${PROPERTY_URL}&$top=${batchSize}`;
+
+  console.log('Deleting existing properties...');
+  await deleteAllProperties();
+
+  while (nextLink) {
+    try {
+      console.log(`Fetching: ${nextLink}`);
+      const response = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
+
+      const data = await response.json();
+      console.log(`Fetched ${data.value.length} properties`);
+
+      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+      const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+      const mappedProperties = mapProperties(data.value, officeDetails);
+      await savePropertiesToSupabase(mappedProperties);
+
+      nextLink = data['@odata.nextLink'] || null;
+    } catch (error) {
+      console.error('Error fetching Ontario properties:', error.message);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+
+  console.log('✅ Ontario property sync complete');
+}
+
+// --- 7️⃣ Run the script ---
 (async function main() {
   try {
-    console.log('Starting data synchronization...');
+    console.log('Starting DDF Ontario property sync...');
     await fetchAndProcessDDFProperties();
-    console.log('Data synchronization completed.');
   } catch (error) {
-    console.error('Error in processing:', error.message);
+    console.error('Fatal error:', error.message);
   }
 })();
