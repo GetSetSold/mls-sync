@@ -198,7 +198,11 @@ async function fetchAndProcessDDFProperties() {
   try {
     console.log('Starting incremental DDF property sync...');
     await fetchAndProcessDDFProperties();
+
+    console.log('Sync complete. Exiting process.');
+    process.exit(0); // Explicitly terminate Node.js
   } catch (error) {
     console.error('Fatal error:', error.message);
+    process.exit(1); // Exit with error code
   }
 })();
