@@ -65,17 +65,12 @@ async function fetchOfficeDetails(token, officeKeys) {
   return officeDetails;
 }
 
-
-
-
-
-
-// Fetch and process DDF properties
+// Fetch and process DDF properties (Ontario only)
 async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   const batchSize = 50;
 
-  // Filter for all Ontario residential properties
+  // Ontario residential properties filter
   const provinceFilter = `(Province eq 'Ontario') and (PropertySubType eq 'Single Family' or PropertySubType eq 'Multi-family')`;
   let nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(provinceFilter)}&$top=${batchSize}`;
 
@@ -107,62 +102,19 @@ async function fetchAndProcessDDFProperties() {
 
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
-      console.error(`Error during city fetch: ${error.message}. Retrying in 5 seconds...`);
+      console.error(`Error fetching Ontario properties: ${error.message}. Retrying in 5 seconds...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  // --- 2️⃣ Fetch Haldimand County by CommunityName ---
-  const haldimandFilter = `(CommunityName eq 'Haldimand') and ${propertySubTypeFilter}`;
-  nextLink = `${PROPERTY_URL}?$filter=${encodeURIComponent(haldimandFilter)}&$top=${batchSize}`;
-
-  while (nextLink) {
-    try {
-      console.log(`Fetching Haldimand County properties by CommunityName...`);
-      const response = await fetch(nextLink, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error fetching Haldimand CommunityName: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log(`Fetched ${data.value.length} Haldimand properties. Processing...`);
-
-      const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-      const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-      const mappedProperties = mapProperties(data.value, officeDetails);
-
-      console.log('Saving Haldimand properties to database...');
-      await savePropertiesToSupabase(mappedProperties);
-
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error(`Error during Haldimand fetch: ${error.message}. Retrying in 5 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-
-  console.log('✅ Data synchronization completed for all properties.');
+  console.log('✅ Data synchronization completed for all Ontario properties.');
 }
-
-
-
-
-
-
-
 
 // Map properties with OfficeName
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
-    const officeKey = property.ListOfficeKey || null; // Use null if missing
-    const officeName = officeKey && officeDetails[officeKey]
-      ? officeDetails[officeKey]
-      : null; // null if no office
+    const officeKey = property.ListOfficeKey || null;
+    const officeName = officeKey && officeDetails[officeKey] ? officeDetails[officeKey] : null;
 
     return {
       ListOfficeKey: officeKey,
@@ -245,7 +197,6 @@ function mapProperties(properties, officeDetails) {
 // Save properties to Supabase in batches
 async function savePropertiesToSupabase(properties) {
   const batchSize = 100;
-
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
     try {
