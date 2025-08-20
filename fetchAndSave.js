@@ -13,7 +13,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
-const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
+const PROPERTY_URL = `https://ddfapi.realtor.ca/odata/v1/Property?$filter=Province eq 'Ontario'`;
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 // Fetch access token
