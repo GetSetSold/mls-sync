@@ -8,7 +8,7 @@ on:
 jobs:
   fetch-and-save:
     runs-on: ubuntu-latest
-    environment: production   # Replace 'production' with your actual environment name if different
+    environment: production
 
     steps:
       - name: Checkout repository
@@ -22,16 +22,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Debug env vars length (for troubleshooting)
-        run: |
-          echo "SUPABASE_KEY length: ${#SUPABASE_KEY}"
-          echo "SUPABASE_URL length: ${#SUPABASE_URL}"
-        env:
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-
       - name: Run DDF fetch script
         run: node fetchAndSave.js
         env:
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
