@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY; // ← service_role key required
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
@@ -15,24 +15,10 @@ const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 // =====================
-// Global Error Handlers
-// =====================
-process.on('unhandledRejection', (reason) => {
-  console.error('❌ Unhandled Rejection:', reason);
-  process.exit(1);
-});
-process.on('uncaughtException', err => {
-  console.error('❌ Uncaught Exception:', err);
-  process.exit(1);
-});
-
-// =====================
-// Live progress helper
+// Live progress
 // =====================
 function showProgress(counters) {
-  process.stdout.write(
-    `\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`
-  );
+  process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
@@ -67,9 +53,10 @@ async function fetchOfficeDetails(token, officeKeys) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
-      if (data.value && data.value.length > 0) officeDetails[key] = data.value[0].OfficeName;
+      officeDetails[key] = (data.value && data.value[0]?.OfficeName) || 'Unknown';
     } catch (error) {
       console.error(`Error fetching office ${key}:`, error.message);
+      officeDetails[key] = 'Unknown';
     }
   }));
 
@@ -77,12 +64,12 @@ async function fetchOfficeDetails(token, officeKeys) {
 }
 
 // =====================
-// Map properties for Supabase (full fields)
+// Map properties for Supabase
 // =====================
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
-    const officeName = officeKey ? officeDetails[officeKey] || null : null;
+    const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
       ListOfficeKey: officeKey,
@@ -169,21 +156,17 @@ async function savePropertiesToSupabase(properties, counters) {
   const batchSize = 100;
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
-    const keys = batch.map(p => p.ListingKey);
 
-    const { data: existingData, error: fetchError } = await supabase
+    const keys = batch.map(p => p.ListingKey);
+    const { data: existingData } = await supabase
       .from('property')
       .select('ListingKey')
       .in('ListingKey', keys);
-    if (fetchError) throw fetchError;
-
     const existingKeys = new Set(existingData.map(p => p.ListingKey));
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    const { error: upsertError } = await supabase
-      .from('property')
-      .upsert(batch, { onConflict: ['ListingKey'] });
-    if (upsertError) throw upsertError;
+    const { error } = await supabase.from('property').upsert(batch, { onConflict: ['ListingKey'] });
+    if (error) console.error('Error saving batch:', error.message);
 
     showProgress(counters);
   }
@@ -198,8 +181,9 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
     .delete()
     .not('ListingKey', 'in', listingKeys)
     .select('ListingKey');
-  if (error) throw error;
-  counters.deleted = data.length;
+  if (error) console.error('Error deleting properties:', error.message);
+  else counters.deleted = data.length;
+
   showProgress(counters);
 }
 
@@ -216,9 +200,13 @@ async function fetchAndProcessDDFProperties() {
     try {
       console.log(`\nFetching properties: ${nextLink}`);
       const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) throw new Error(`Failed to fetch properties: ${response.statusText}`);
-
       const data = await response.json();
+
+      if (!data.value) {
+        console.error('❌ DDF returned unexpected response:', JSON.stringify(data, null, 2));
+        throw new Error('Missing value array in DDF response');
+      }
+
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
