@@ -177,20 +177,64 @@ async function savePropertiesToSupabase(properties, counters) {
   }
 }
 
+
 // =====================
-// Delete non-matching
+// Delete non-matching (fixed with chunking)
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
-  const { data, error } = await supabase
-    .from('property')
-    .delete()
-    .not('ListingKey', 'in', listingKeys)
-    .select('ListingKey');
-  if (error) console.error('Error deleting properties:', error.message);
-  else counters.deleted = data.length;
+  try {
+    // 1. Fetch existing keys from Supabase
+    const { data: existingKeys, error: fetchError } = await supabase
+      .from('property')
+      .select('ListingKey');
 
-  showProgress(counters);
+    if (fetchError) {
+      console.error('Error fetching existing keys for deletion:', fetchError.message);
+      return;
+    }
+
+    const existingSet = new Set(existingKeys.map(r => r.ListingKey));
+    const latestSet = new Set(listingKeys);
+
+    // 2. Find which keys need deletion
+    const toDelete = [...existingSet].filter(key => !latestSet.has(key));
+
+    if (toDelete.length === 0) {
+      console.log('No properties to delete.');
+      return;
+    }
+
+    console.log(`Preparing to delete ${toDelete.length} old properties...`);
+
+    // 3. Delete in chunks (avoid Postgres parameter limit ~65k)
+    const chunkSize = 500;
+    let deletedCount = 0;
+
+    for (let i = 0; i < toDelete.length; i += chunkSize) {
+      const chunk = toDelete.slice(i, i + chunkSize);
+      const { data, error } = await supabase
+        .from('property')
+        .delete()
+        .in('ListingKey', chunk)
+        .select('ListingKey');
+
+      if (error) {
+        console.error(`Error deleting chunk at ${i}:`, error.message);
+      } else {
+        deletedCount += data.length;
+        console.log(`Deleted ${data.length} records (chunk ${i / chunkSize + 1})`);
+      }
+    }
+
+    counters.deleted = deletedCount;
+    console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
+
+    showProgress(counters);
+  } catch (err) {
+    console.error('Fatal deletion error:', err.message);
+  }
 }
+
 
 // =====================
 // Fetch & process DDF
