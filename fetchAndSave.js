@@ -72,9 +72,9 @@ function mapProperties(properties, officeDetails) {
     const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
+      ListingKey: property.ListingKey, // ✅ primary key
       ListOfficeKey: officeKey,
       OfficeName: officeName,
-      ListingKey: property.ListingKey,
       PropertyType: property.PropertyType,
       PropertySubType: property.PropertySubType,
       TotalActualRent: property.TotalActualRent,
@@ -157,15 +157,20 @@ async function savePropertiesToSupabase(properties, counters) {
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
 
+    // Check existing
     const keys = batch.map(p => p.ListingKey);
     const { data: existingData } = await supabase
       .from('property')
       .select('ListingKey')
       .in('ListingKey', keys);
-    const existingKeys = new Set(existingData.map(p => p.ListingKey));
+
+    const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    const { error } = await supabase.from('property').upsert(batch, { onConflict: ['ListingKey'] });
+    // ✅ upsert on ListingKey (primary key)
+    const { error } = await supabase.from('property').upsert(batch, {
+      onConflict: ['ListingKey'],
+    });
     if (error) console.error('Error saving batch:', error.message);
 
     showProgress(counters);
@@ -221,7 +226,9 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  if (allFetchedKeys.length > 0) await deleteNonMatchingProperties(allFetchedKeys, counters);
+  if (allFetchedKeys.length > 0) {
+    await deleteNonMatchingProperties(allFetchedKeys, counters);
+  }
 
   console.log('\n✅ DDF incremental sync complete');
   console.log(`Final counts → Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
