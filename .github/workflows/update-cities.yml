@@ -4,13 +4,13 @@ on:
   schedule:
     # Runs every day at 10 AM EST (15:00 UTC)
     - cron: "0 15 * * *"
-  workflow_dispatch: # manual run allowed
+  workflow_dispatch: # allow manual run
 
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Node.js
@@ -21,8 +21,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run update script
+      - name: Run updateCities script
         run: node updateCities.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }} # optional if you want to read URL from env
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }} # optional if needed
