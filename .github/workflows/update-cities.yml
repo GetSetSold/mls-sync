@@ -1,4 +1,4 @@
-name: Update City Coordinates
+name: Update Cities Codes
 
 on:
   schedule:
