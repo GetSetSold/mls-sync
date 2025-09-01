@@ -4,13 +4,13 @@
   "description": "My app connected to Supabase",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "update-cities": "node updateCities.js"
   },
   "dependencies": {
     "node-fetch": "^2.6.7",
     "@supabase/supabase-js": "^2.0.0",
     "fastify": "^4.0.0"
-    
   },
   "engines": {
     "node": "16.x"
@@ -21,9 +21,4 @@
   "license": "MIT",
   "keywords": ["node", "glitch"],
   "type": "module"
-}
-
-"scripts": {
-  "start": "node server.js",
-  "update-cities": "node updateCities.js"
 }
