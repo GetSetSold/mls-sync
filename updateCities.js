@@ -1,10 +1,13 @@
-import fetch from "node-fetch";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from '@supabase/supabase-js';
+import fetch from 'node-fetch';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // hardcoded URL
+const supabaseKey = process.env.SUPABASE_KEY;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 
 async function updateCities() {
