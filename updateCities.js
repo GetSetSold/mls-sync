@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
 // ---------------- Supabase Setup ----------------
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // hardcoded URL
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // can also read from env if you want
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
