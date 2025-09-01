@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs every day at 10 AM EST (15:00 UTC)
     - cron: "0 15 * * *"
-  workflow_dispatch: # allow manual run too
+  workflow_dispatch: # manual run allowed
 
 jobs:
   update:
@@ -25,3 +25,4 @@ jobs:
         run: node updateCities.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }} # optional if you want to read URL from env
