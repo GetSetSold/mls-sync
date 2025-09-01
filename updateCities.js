@@ -1,17 +1,15 @@
-
+import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // can also read from env
+// ---------------- Supabase Setup ----------------
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // hardcoded URL
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-
-// Function to geocode a city using OpenStreetMap Nominatim
+// ---------------- Geocoding Function ----------------
 async function geocodeCity(cityName) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityName + ', Ontario, Canada')}&limit=1`;
 
@@ -29,7 +27,7 @@ async function geocodeCity(cityName) {
   return null;
 }
 
-// Main function to update cities
+// ---------------- Main Update Function ----------------
 async function updateCities() {
   try {
     const { data: cities, error } = await supabase
@@ -51,7 +49,7 @@ async function updateCities() {
             Latitude: coords.lat,
             Longitude: coords.lon,
           })
-          .eq('City', city.City); // update by City name
+          .eq('City', city.City); // use City as identifier
 
         if (updateError) {
           console.error(`❌ Failed to update ${city.City}:`, updateError);
@@ -66,7 +64,7 @@ async function updateCities() {
     console.log('🎉 All cities processed.');
   } catch (err) {
     console.error('❌ Script failed:', err.message);
-    process.exit(1); // fail workflow if there’s an error
+    process.exit(1);
   }
 }
 
