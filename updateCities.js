@@ -1,72 +1,54 @@
-import { createClient } from "@supabase/supabase-js";
 import fetch from "node-fetch";
+import { createClient } from "@supabase/supabase-js";
 
-// 🔑 Setup your Supabase credentials
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // needs write access
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// 🌍 Function to geocode using OpenStreetMap Nominatim
-async function geocodeCity(cityName) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-    cityName + ", Ontario, Canada"
-  )}`;
-
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Supabase-Geocode-Script" },
-  });
-  const data = await res.json();
-
-  if (data.length > 0) {
-    return {
-      lat: parseFloat(data[0].lat),
-      lon: parseFloat(data[0].lon),
-    };
-  }
-  return null;
-}
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function updateCities() {
-  // 1️⃣ Only fetch cities that have missing lat/lon
-  const { data: cities, error } = await supabase
-    .from("city_listings")
-    .select("id, City, Latitude, Longitude")
-    .or("Latitude.is.null,Longitude.is.null");
+  try {
+    // 1. Get all cities
+    const { data: cities, error } = await supabase
+      .from("city_listings")
+      .select("City, Latitude, Longitude");
 
-  if (error) {
-    console.error("❌ Error fetching cities:", error);
-    return;
-  }
+    if (error) throw error;
 
-  for (const city of cities) {
-    // Skip if already has both coordinates
-    if (city.Latitude && city.Longitude) {
-      console.log(`⏭️ Skipping ${city.City} (already has coords)`);
-      continue;
-    }
+    for (const city of cities) {
+      if (!city.Latitude || !city.Longitude) {
+        console.log(`Fetching coordinates for: ${city.City}`);
 
-    console.log(`⏳ Geocoding ${city.City}...`);
-    const coords = await geocodeCity(city.City);
+        const url = `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(
+          city.City
+        )}&country=Canada&format=json&limit=1`;
 
-    if (coords) {
-      const { error: updateError } = await supabase
-        .from("city_listings")
-        .update({
-          Latitude: coords.lat,
-          Longitude: coords.lon,
-        })
-        .eq("id", city.id);
+        const res = await fetch(url, {
+          headers: { "User-Agent": "getsetsold-bot/1.0" },
+        });
+        const data = await res.json();
 
-      if (updateError) {
-        console.error(`❌ Failed to update ${city.City}:`, updateError);
-      } else {
-        console.log(
-          `✅ Updated ${city.City} → ${coords.lat}, ${coords.lon}`
-        );
+        if (data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lon = parseFloat(data[0].lon);
+
+          const { error: updateError } = await supabase
+            .from("city_listings")
+            .update({ Latitude: lat, Longitude: lon })
+            .eq("City", city.City);
+
+          if (updateError) throw updateError;
+
+          console.log(`✅ Updated ${city.City} → ${lat}, ${lon}`);
+        } else {
+          console.warn(`⚠️ No coordinates found for ${city.City}`);
+        }
       }
-    } else {
-      console.log(`⚠️ Could not geocode ${city.City}`);
     }
+
+    console.log("🎉 Update completed successfully.");
+  } catch (err) {
+    console.error("❌ Script failed:", err.message);
+    process.exit(1); // keeps GitHub Action marked as failed
   }
 }
 
