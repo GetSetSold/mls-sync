@@ -22,7 +22,8 @@ jobs:
         run: npm install
 
       - name: Run update script
-        run: npm run update-cities
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+    run: node updateCities.js
+    env:
+    SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+
