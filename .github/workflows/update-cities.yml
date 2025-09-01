@@ -23,6 +23,6 @@ jobs:
 
       - name: Run update script
         run: npm run update-cities
-         env:
+        env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
