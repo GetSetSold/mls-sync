@@ -1,9 +1,11 @@
 import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
 
 async function updateCities() {
   try {
