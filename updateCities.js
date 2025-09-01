@@ -1,13 +1,15 @@
-import { createClient } from '@supabase/supabase-js';
+
 import fetch from 'node-fetch';
 
-// Supabase client setup
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // hardcoded URL
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // can also read from env
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
+
 
 // Function to geocode a city using OpenStreetMap Nominatim
 async function geocodeCity(cityName) {
