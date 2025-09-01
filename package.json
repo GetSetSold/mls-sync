@@ -22,3 +22,8 @@
   "keywords": ["node", "glitch"],
   "type": "module"
 }
+
+"scripts": {
+  "start": "node server.js",
+  "update-cities": "node updateCities.js"
+}
