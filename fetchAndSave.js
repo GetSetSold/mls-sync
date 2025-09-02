@@ -98,17 +98,24 @@ function mapProperties(properties, officeDetails) {
       PhotosCount: property.PhotosCount,
       PhotosChangeTimestamp: property.PhotosChangeTimestamp,
       CommonInterest: property.CommonInterest,
-      UnparsedAddress: property.UnparsedAddress,
-      PostalCode: property.PostalCode,
-      SubdivisionName: property.SubdivisionName,
+
+      // ✅ Flattened Address fields
+      UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
+      
+      City: property.Address?.City || property.City || 'Unknown',
+      Province: property.Address?.Province || null,
+      PostalCode: property.Address?.PostalCode || property.PostalCode || null,
+      Country: property.Address?.Country || null,
       CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
+
+      SubdivisionName: property.SubdivisionName,
       Neighbourhood: property.Neighbourhood,
-      UnitNumber: property.UnitNumber,
-      City: property.City,
       Directions: property.Directions,
       Latitude: property.Latitude,
       Longitude: property.Longitude,
       CityRegion: property.CityRegion,
+
+      // ✅ Property details
       ParkingTotal: property.ParkingTotal,
       YearBuilt: property.YearBuilt,
       BathroomsPartial: property.BathroomsPartial,
