@@ -101,13 +101,9 @@ function mapProperties(properties, officeDetails) {
 
       // ✅ Flattened Address fields
       UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
-      
       City: property.Address?.City || property.City || 'Unknown',
-      Province: property.Address?.Province || null,
       PostalCode: property.Address?.PostalCode || property.PostalCode || null,
-     
       CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
-
       SubdivisionName: property.SubdivisionName,
       Neighbourhood: property.Neighbourhood,
       Directions: property.Directions,
