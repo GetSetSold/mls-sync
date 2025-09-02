@@ -1,17 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-// =====================
-// Supabase client
-// =====================
-const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
+
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// =====================
-// DDF API config
-// =====================
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
@@ -19,14 +15,14 @@ const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 // =====================
-// Show live progress
+// Live progress
 // =====================
 function showProgress(counters) {
   process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
-// Get DDF access token
+// Fetch DDF access token
 // =====================
 async function getAccessToken() {
   const response = await fetch(TOKEN_URL, {
@@ -70,94 +66,91 @@ async function fetchOfficeDetails(token, officeKeys) {
 // =====================
 // Map properties for Supabase
 // =====================
-function normalize(value) {
-  return value === undefined ? null : value;
-}
-
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
     const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
-      ListingKey: normalize(property.ListingKey),
-      PropertySubType: normalize(property.PropertySubType),
-      NumberOfUnitsTotal: normalize(property.NumberOfUnitsTotal),
-      LotFeatures: normalize(property.LotFeatures),
-      LotSizeArea: normalize(property.LotSizeArea),
-      LotSizeDimensions: normalize(property.LotSizeDimensions),
-      LotSizeUnits: normalize(property.LotSizeUnits),
-      PoolFeatures: normalize(property.PoolFeatures),
-      CommunityFeatures: normalize(property.CommunityFeatures),
-      Appliances: normalize(property.Appliances),
-      TotalActualRent: normalize(property.TotalActualRent),
-      AssociationFee: normalize(property.AssociationFee),
-      AssociationFeeIncludes: normalize(property.AssociationFeeIncludes),
-      OriginalEntryTimestamp: normalize(property.OriginalEntryTimestamp),
-      ModificationTimestamp: normalize(property.ModificationTimestamp),
-      ListingId: normalize(property.ListingId),
-      StatusChangeTimestamp: normalize(property.StatusChangeTimestamp),
-      PublicRemarks: normalize(property.PublicRemarks),
-      ListPrice: normalize(property.ListPrice),
-      OriginatingSystemName: normalize(property.OriginatingSystemName),
-      PhotosCount: normalize(property.PhotosCount),
-      PhotosChangeTimestamp: normalize(property.PhotosChangeTimestamp),
-      CommonInterest: normalize(property.CommonInterest),
-      UnparsedAddress: normalize(property.UnparsedAddress),
-      PostalCode: normalize(property.PostalCode),
-      SubdivisionName: normalize(property.SubdivisionName),
-      UnitNumber: normalize(property.UnitNumber),
-      City: normalize(property.City),
-      Directions: normalize(property.Directions),
-      Latitude: normalize(property.Latitude),
-      Longitude: normalize(property.Longitude),
-      CityRegion: normalize(property.CityRegion),
-      ParkingTotal: normalize(property.ParkingTotal),
-      YearBuilt: normalize(property.YearBuilt),
-      BathroomsPartial: normalize(property.BathroomsPartial),
-      BathroomsTotalInteger: normalize(property.BathroomsTotalInteger),
-      BedroomsTotal: normalize(property.BedroomsTotal),
-      BuildingAreaTotal: normalize(property.BuildingAreaTotal),
-      BuildingAreaUnits: normalize(property.BuildingAreaUnits),
-      AboveGradeFinishedArea: normalize(property.AboveGradeFinishedArea),
-      BelowGradeFinishedArea: normalize(property.BelowGradeFinishedArea),
-      LivingArea: normalize(property.LivingArea),
-      Flooring: normalize(property.Flooring),
-      Roof: normalize(property.Roof),
-      Stories: normalize(property.Stories),
-      PropertyAttachedYN: normalize(property.PropertyAttachedYN),
-      BedroomsAboveGrade: normalize(property.BedroomsAboveGrade),
-      BedroomsBelowGrade: normalize(property.BedroomsBelowGrade),
-      TaxAnnualAmount: normalize(property.TaxAnnualAmount),
-      TaxYear: normalize(property.TaxYear),
-      StructureType: normalize(property.StructureType),
-      IrrigationSource: normalize(property.IrrigationSource),
-      owner_id: normalize(property.owner_id),
-      FireplacesTotal: normalize(property.FireplacesTotal),
-      Rooms: normalize(property.Rooms),
-      Media: normalize(property.Media),
-      Utilities: normalize(property.Utilities),
-      Sewer: normalize(property.Sewer),
-      WaterSource: normalize(property.WaterSource),
-      Cooling: normalize(property.Cooling),
-      ConstructionMaterials: normalize(property.ConstructionMaterials),
-      ParkingFeatures: normalize(property.ParkingFeatures),
-      BuildingFeatures: normalize(property.BuildingFeatures),
-      ArchitecturalStyle: normalize(property.ArchitecturalStyle),
-      Heating: normalize(property.Heating),
-      FoundationDetails: normalize(property.FoundationDetails),
-      Basement: normalize(property.Basement),
-      ExteriorFeatures: normalize(property.ExteriorFeatures),
-      OfficeName: officeName,
+      ListingKey: property.ListingKey, // ✅ primary key
       ListOfficeKey: officeKey,
-      ListingURL: normalize(property.ListingURL),
-      CommunityName: normalize(property.Address?.CommunityName || property.City || 'Unknown'),
-      Neighbourhood: normalize(property.Neighbourhood),
-      PropertyType: normalize(property.PropertyType)
+      OfficeName: officeName,
+      PropertyType: property.PropertyType,
+      PropertySubType: property.PropertySubType,
+      TotalActualRent: property.TotalActualRent,
+      NumberOfUnitsTotal: property.NumberOfUnitsTotal,
+      LotFeatures: property.LotFeatures,
+      LotSizeArea: property.LotSizeArea,
+      LotSizeDimensions: property.LotSizeDimensions,
+      LotSizeUnits: property.LotSizeUnits,
+      PoolFeatures: property.PoolFeatures,
+      CommunityFeatures: property.CommunityFeatures,
+      Appliances: property.Appliances,
+      AssociationFee: property.AssociationFee,
+      AssociationFeeIncludes: property.AssociationFeeIncludes,
+      OriginalEntryTimestamp: property.OriginalEntryTimestamp,
+      ModificationTimestamp: property.ModificationTimestamp,
+      ListingId: property.ListingId,
+      StatusChangeTimestamp: property.StatusChangeTimestamp,
+      PublicRemarks: property.PublicRemarks,
+      ListPrice: property.ListPrice,
+      OriginatingSystemName: property.OriginatingSystemName,
+      PhotosCount: property.PhotosCount,
+      PhotosChangeTimestamp: property.PhotosChangeTimestamp,
+      CommonInterest: property.CommonInterest,
+
+      // ✅ Flattened Address fields
+      UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
+      City: property.Address?.City || property.City || 'Unknown',
+      PostalCode: property.Address?.PostalCode || property.PostalCode || null,
+      CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
+      SubdivisionName: property.SubdivisionName,
+      Neighbourhood: property.Neighbourhood,
+      Directions: property.Directions,
+      Latitude: property.Latitude,
+      Longitude: property.Longitude,
+      CityRegion: property.CityRegion,
+
+      // ✅ Property details
+      ParkingTotal: property.ParkingTotal,
+      YearBuilt: property.YearBuilt,
+      BathroomsPartial: property.BathroomsPartial,
+      BathroomsTotalInteger: property.BathroomsTotalInteger,
+      BedroomsTotal: property.BedroomsTotal,
+      BuildingAreaTotal: property.BuildingAreaTotal,
+      BuildingAreaUnits: property.BuildingAreaUnits,
+      BuildingFeatures: property.BuildingFeatures,
+      AboveGradeFinishedArea: property.AboveGradeFinishedArea,
+      BelowGradeFinishedArea: property.BelowGradeFinishedArea,
+      LivingArea: property.LivingArea,
+      FireplacesTotal: property.FireplacesTotal,
+      ArchitecturalStyle: property.ArchitecturalStyle,
+      Heating: property.Heating,
+      FoundationDetails: property.FoundationDetails,
+      Basement: property.Basement,
+      ExteriorFeatures: property.ExteriorFeatures,
+      Flooring: property.Flooring,
+      ParkingFeatures: property.ParkingFeatures,
+      Cooling: property.Cooling,
+      IrrigationSource: property.IrrigationSource,
+      WaterSource: property.WaterSource,
+      Utilities: property.Utilities,
+      Sewer: property.Sewer,
+      Roof: property.Roof,
+      ConstructionMaterials: property.ConstructionMaterials,
+      Stories: property.Stories,
+      PropertyAttachedYN: property.PropertyAttachedYN,
+      BedroomsAboveGrade: property.BedroomsAboveGrade,
+      BedroomsBelowGrade: property.BedroomsBelowGrade,
+      TaxAnnualAmount: property.TaxAnnualAmount,
+      TaxYear: property.TaxYear,
+      Media: property.Media,
+      Rooms: property.Rooms,
+      StructureType: property.StructureType,
+      ListingURL: property.ListingURL,
     };
   });
 }
-
 
 // =====================
 // Save properties with counters
@@ -177,7 +170,7 @@ async function savePropertiesToSupabase(properties, counters) {
     const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    // Upsert on ListingKey
+    // ✅ upsert on ListingKey (primary key)
     const { error } = await supabase.from('property').upsert(batch, {
       onConflict: ['ListingKey'],
     });
@@ -187,11 +180,13 @@ async function savePropertiesToSupabase(properties, counters) {
   }
 }
 
+
 // =====================
-// Delete non-matching properties
+// Delete non-matching (fixed with chunking)
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
   try {
+    // 1. Fetch existing keys from Supabase
     const { data: existingKeys, error: fetchError } = await supabase
       .from('property')
       .select('ListingKey');
@@ -203,15 +198,18 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
 
     const existingSet = new Set(existingKeys.map(r => r.ListingKey));
     const latestSet = new Set(listingKeys);
+
+    // 2. Find which keys need deletion
     const toDelete = [...existingSet].filter(key => !latestSet.has(key));
 
-    if (!toDelete.length) {
+    if (toDelete.length === 0) {
       console.log('No properties to delete.');
       return;
     }
 
     console.log(`Preparing to delete ${toDelete.length} old properties...`);
 
+    // 3. Delete in chunks (avoid Postgres parameter limit ~65k)
     const chunkSize = 500;
     let deletedCount = 0;
 
@@ -223,17 +221,23 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
         .in('ListingKey', chunk)
         .select('ListingKey');
 
-      if (error) console.error(`Error deleting chunk at ${i}:`, error.message);
-      else deletedCount += data.length;
+      if (error) {
+        console.error(`Error deleting chunk at ${i}:`, error.message);
+      } else {
+        deletedCount += data.length;
+        console.log(`Deleted ${data.length} records (chunk ${i / chunkSize + 1})`);
+      }
     }
 
     counters.deleted = deletedCount;
     console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
+
     showProgress(counters);
   } catch (err) {
     console.error('Fatal deletion error:', err.message);
   }
 }
+
 
 // =====================
 // Fetch & process DDF
@@ -250,7 +254,10 @@ async function fetchAndProcessDDFProperties() {
       const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json();
 
-      if (!data.value) throw new Error('Missing value array in DDF response');
+      if (!data.value) {
+        console.error('❌ DDF returned unexpected response:', JSON.stringify(data, null, 2));
+        throw new Error('Missing value array in DDF response');
+      }
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
