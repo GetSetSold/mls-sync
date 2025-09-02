@@ -72,7 +72,7 @@ function mapProperties(properties, officeDetails) {
     const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
-      ListingKey: property.ListingKey,
+      ListingKey: property.ListingKey, // ✅ primary key
       ListOfficeKey: officeKey,
       OfficeName: officeName,
       PropertyType: property.PropertyType,
@@ -150,13 +150,14 @@ function mapProperties(properties, officeDetails) {
 }
 
 // =====================
-// Save properties to Supabase
+// Save properties with counters
 // =====================
 async function savePropertiesToSupabase(properties, counters) {
   const batchSize = 100;
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
 
+    // Check existing
     const keys = batch.map(p => p.ListingKey);
     const { data: existingData } = await supabase
       .from('property')
@@ -166,51 +167,74 @@ async function savePropertiesToSupabase(properties, counters) {
     const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    const { error } = await supabase.from('property').upsert(batch, { onConflict: ['ListingKey'] });
+    // ✅ upsert on ListingKey (primary key)
+    const { error } = await supabase.from('property').upsert(batch, {
+      onConflict: ['ListingKey'],
+    });
     if (error) console.error('Error saving batch:', error.message);
 
     showProgress(counters);
   }
 }
 
+
 // =====================
-// Delete non-matching properties
+// Delete non-matching (fixed with chunking)
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
-  const { data: existingKeys, error: fetchError } = await supabase.from('property').select('ListingKey');
-  if (fetchError) {
-    console.error('Error fetching existing keys for deletion:', fetchError.message);
-    return;
-  }
-
-  const existingSet = new Set(existingKeys.map(r => r.ListingKey));
-  const latestSet = new Set(listingKeys);
-  const toDelete = [...existingSet].filter(key => !latestSet.has(key));
-
-  if (!toDelete.length) return;
-
-  console.log(`Preparing to delete ${toDelete.length} old properties...`);
-
-  const chunkSize = 500;
-  let deletedCount = 0;
-
-  for (let i = 0; i < toDelete.length; i += chunkSize) {
-    const chunk = toDelete.slice(i, i + chunkSize);
-    const { data, error } = await supabase
+  try {
+    // 1. Fetch existing keys from Supabase
+    const { data: existingKeys, error: fetchError } = await supabase
       .from('property')
-      .delete()
-      .in('ListingKey', chunk)
       .select('ListingKey');
 
-    if (error) console.error(`Error deleting chunk at ${i}:`, error.message);
-    else deletedCount += data.length;
-    console.log(`Deleted ${data.length} records (chunk ${i / chunkSize + 1})`);
-  }
+    if (fetchError) {
+      console.error('Error fetching existing keys for deletion:', fetchError.message);
+      return;
+    }
 
-  counters.deleted = deletedCount;
-  console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
-  showProgress(counters);
+    const existingSet = new Set(existingKeys.map(r => r.ListingKey));
+    const latestSet = new Set(listingKeys);
+
+    // 2. Find which keys need deletion
+    const toDelete = [...existingSet].filter(key => !latestSet.has(key));
+
+    if (toDelete.length === 0) {
+      console.log('No properties to delete.');
+      return;
+    }
+
+    console.log(`Preparing to delete ${toDelete.length} old properties...`);
+
+    // 3. Delete in chunks (avoid Postgres parameter limit ~65k)
+    const chunkSize = 500;
+    let deletedCount = 0;
+
+    for (let i = 0; i < toDelete.length; i += chunkSize) {
+      const chunk = toDelete.slice(i, i + chunkSize);
+      const { data, error } = await supabase
+        .from('property')
+        .delete()
+        .in('ListingKey', chunk)
+        .select('ListingKey');
+
+      if (error) {
+        console.error(`Error deleting chunk at ${i}:`, error.message);
+      } else {
+        deletedCount += data.length;
+        console.log(`Deleted ${data.length} records (chunk ${i / chunkSize + 1})`);
+      }
+    }
+
+    counters.deleted = deletedCount;
+    console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
+
+    showProgress(counters);
+  } catch (err) {
+    console.error('Fatal deletion error:', err.message);
+  }
 }
+
 
 // =====================
 // Fetch & process DDF
@@ -227,15 +251,18 @@ async function fetchAndProcessDDFProperties() {
       const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json();
 
-      if (!data.value) throw new Error('Missing value array in DDF response');
+      if (!data.value) {
+        console.error('❌ DDF returned unexpected response:', JSON.stringify(data, null, 2));
+        throw new Error('Missing value array in DDF response');
+      }
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
       const mappedProperties = mapProperties(data.value, officeDetails);
       await savePropertiesToSupabase(mappedProperties, counters);
-      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
 
+      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
       nextLink = data['@odata.nextLink'] || null;
     } catch (error) {
       console.error('Error fetching properties:', error.message);
@@ -243,13 +270,9 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  if (allFetchedKeys.length) await deleteNonMatchingProperties(allFetchedKeys, counters);
-
-  // ✅ Refresh materialized views AFTER all inserts/updates/deletes
-  console.log('\nRefreshing materialized views...');
-  const { error: refreshError } = await supabase.rpc('refresh_city_views');
-  if (refreshError) console.error('Error refreshing views:', refreshError.message);
-  else console.log('Materialized views refreshed successfully.');
+  if (allFetchedKeys.length > 0) {
+    await deleteNonMatchingProperties(allFetchedKeys, counters);
+  }
 
   console.log('\n✅ DDF incremental sync complete');
   console.log(`Final counts → Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
