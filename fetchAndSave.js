@@ -1,13 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
+// =====================
+// Supabase client
+// =====================
+const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
-
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// =====================
+// DDF API config
+// =====================
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
@@ -15,14 +19,14 @@ const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 // =====================
-// Live progress
+// Show live progress
 // =====================
 function showProgress(counters) {
   process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
-// Fetch DDF access token
+// Get DDF access token
 // =====================
 async function getAccessToken() {
   const response = await fetch(TOKEN_URL, {
@@ -72,7 +76,7 @@ function mapProperties(properties, officeDetails) {
     const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
-      ListingKey: property.ListingKey, // ✅ primary key
+      ListingKey: property.ListingKey,
       ListOfficeKey: officeKey,
       OfficeName: officeName,
       PropertyType: property.PropertyType,
@@ -98,11 +102,16 @@ function mapProperties(properties, officeDetails) {
       PhotosCount: property.PhotosCount,
       PhotosChangeTimestamp: property.PhotosChangeTimestamp,
       CommonInterest: property.CommonInterest,
-
-      // ✅ Flattened Address fields
       UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
+      StreetAddress: property.Address?.StreetAddress || null,
+      StreetNumber: property.Address?.StreetNumber || null,
+      StreetName: property.Address?.StreetName || null,
+      StreetSuffix: property.Address?.StreetSuffix || null,
+      UnitNumber: property.Address?.UnitNumber || property.UnitNumber || null,
       City: property.Address?.City || property.City || 'Unknown',
+      Province: property.Address?.Province || null,
       PostalCode: property.Address?.PostalCode || property.PostalCode || null,
+      Country: property.Address?.Country || null,
       CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
       SubdivisionName: property.SubdivisionName,
       Neighbourhood: property.Neighbourhood,
@@ -110,8 +119,6 @@ function mapProperties(properties, officeDetails) {
       Latitude: property.Latitude,
       Longitude: property.Longitude,
       CityRegion: property.CityRegion,
-
-      // ✅ Property details
       ParkingTotal: property.ParkingTotal,
       YearBuilt: property.YearBuilt,
       BathroomsPartial: property.BathroomsPartial,
@@ -119,7 +126,6 @@ function mapProperties(properties, officeDetails) {
       BedroomsTotal: property.BedroomsTotal,
       BuildingAreaTotal: property.BuildingAreaTotal,
       BuildingAreaUnits: property.BuildingAreaUnits,
-      BuildingFeatures: property.BuildingFeatures,
       AboveGradeFinishedArea: property.AboveGradeFinishedArea,
       BelowGradeFinishedArea: property.BelowGradeFinishedArea,
       LivingArea: property.LivingArea,
@@ -170,7 +176,7 @@ async function savePropertiesToSupabase(properties, counters) {
     const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    // ✅ upsert on ListingKey (primary key)
+    // Upsert on ListingKey
     const { error } = await supabase.from('property').upsert(batch, {
       onConflict: ['ListingKey'],
     });
@@ -180,13 +186,11 @@ async function savePropertiesToSupabase(properties, counters) {
   }
 }
 
-
 // =====================
-// Delete non-matching (fixed with chunking)
+// Delete non-matching properties
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
   try {
-    // 1. Fetch existing keys from Supabase
     const { data: existingKeys, error: fetchError } = await supabase
       .from('property')
       .select('ListingKey');
@@ -198,18 +202,15 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
 
     const existingSet = new Set(existingKeys.map(r => r.ListingKey));
     const latestSet = new Set(listingKeys);
-
-    // 2. Find which keys need deletion
     const toDelete = [...existingSet].filter(key => !latestSet.has(key));
 
-    if (toDelete.length === 0) {
+    if (!toDelete.length) {
       console.log('No properties to delete.');
       return;
     }
 
     console.log(`Preparing to delete ${toDelete.length} old properties...`);
 
-    // 3. Delete in chunks (avoid Postgres parameter limit ~65k)
     const chunkSize = 500;
     let deletedCount = 0;
 
@@ -221,23 +222,17 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
         .in('ListingKey', chunk)
         .select('ListingKey');
 
-      if (error) {
-        console.error(`Error deleting chunk at ${i}:`, error.message);
-      } else {
-        deletedCount += data.length;
-        console.log(`Deleted ${data.length} records (chunk ${i / chunkSize + 1})`);
-      }
+      if (error) console.error(`Error deleting chunk at ${i}:`, error.message);
+      else deletedCount += data.length;
     }
 
     counters.deleted = deletedCount;
     console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
-
     showProgress(counters);
   } catch (err) {
     console.error('Fatal deletion error:', err.message);
   }
 }
-
 
 // =====================
 // Fetch & process DDF
@@ -254,10 +249,7 @@ async function fetchAndProcessDDFProperties() {
       const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json();
 
-      if (!data.value) {
-        console.error('❌ DDF returned unexpected response:', JSON.stringify(data, null, 2));
-        throw new Error('Missing value array in DDF response');
-      }
+      if (!data.value) throw new Error('Missing value array in DDF response');
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
