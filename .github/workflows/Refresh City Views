@@ -1,10 +1,9 @@
 name: Refresh City Views
 
-# Schedule to run daily at 35 mins past 13:00 UTC
 on:
   schedule:
-    - cron: '35 13 * * *'
-  workflow_dispatch: # allows manual run from GitHub UI
+    - cron: '30 13 * * *'  # 9:30 AM ET
+  workflow_dispatch:       # allows manual run
 
 jobs:
   refresh-views:
@@ -13,14 +12,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install psql client
+        run: sudo apt-get install -y postgresql-client
 
       - name: Refresh Materialized Views
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }} # full postgres:// URL
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           psql "$SUPABASE_DB_URL" <<EOF
           REFRESH MATERIALIZED VIEW city_listings_full;
           REFRESH MATERIALIZED VIEW city_listings_full_fast;
           EOF
+
