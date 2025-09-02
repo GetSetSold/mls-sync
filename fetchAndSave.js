@@ -156,7 +156,7 @@ function mapProperties(properties, officeDetails) {
 // Save properties with counters
 // =====================
 async function savePropertiesToSupabase(properties, counters) {
-  const batchSize = 100;
+  const batchSize = 50;
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
 
