@@ -72,82 +72,82 @@ function mapProperties(properties, officeDetails) {
     const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
 
     return {
-      "ListingKey": property.ListingKey,
-      "ListOfficeKey": officeKey,
-      "OfficeName": officeName,
-      "PropertyType": property.PropertyType,
-      "PropertySubType": property.PropertySubType,
-      "TotalActualRent": property.TotalActualRent,
-      "NumberOfUnitsTotal": property.NumberOfUnitsTotal,
-      "LotFeatures": property.LotFeatures,
-      "LotSizeArea": property.LotSizeArea,
-      "LotSizeDimensions": property.LotSizeDimensions,
-      "LotSizeUnits": property.LotSizeUnits,
-      "PoolFeatures": property.PoolFeatures,
-      "CommunityFeatures": property.CommunityFeatures,
-      "Appliances": property.Appliances,
-      "AssociationFee": property.AssociationFee,
-      "AssociationFeeIncludes": property.AssociationFeeIncludes,
-      "OriginalEntryTimestamp": property.OriginalEntryTimestamp,
-      "ModificationTimestamp": property.ModificationTimestamp,
-      "ListingId": property.ListingId,
-      "StatusChangeTimestamp": property.StatusChangeTimestamp,
-      "PublicRemarks": property.PublicRemarks,
-      "ListPrice": property.ListPrice,
-      "OriginatingSystemName": property.OriginatingSystemName,
-      "PhotosCount": property.PhotosCount,
-      "PhotosChangeTimestamp": property.PhotosChangeTimestamp,
-      "CommonInterest": property.CommonInterest,
+      ListingKey: property.ListingKey, // ✅ primary key
+      ListOfficeKey: officeKey,
+      OfficeName: officeName,
+      PropertyType: property.PropertyType,
+      PropertySubType: property.PropertySubType,
+      TotalActualRent: property.TotalActualRent,
+      NumberOfUnitsTotal: property.NumberOfUnitsTotal,
+      LotFeatures: property.LotFeatures,
+      LotSizeArea: property.LotSizeArea,
+      LotSizeDimensions: property.LotSizeDimensions,
+      LotSizeUnits: property.LotSizeUnits,
+      PoolFeatures: property.PoolFeatures,
+      CommunityFeatures: property.CommunityFeatures,
+      Appliances: property.Appliances,
+      AssociationFee: property.AssociationFee,
+      AssociationFeeIncludes: property.AssociationFeeIncludes,
+      OriginalEntryTimestamp: property.OriginalEntryTimestamp,
+      ModificationTimestamp: property.ModificationTimestamp,
+      ListingId: property.ListingId,
+      StatusChangeTimestamp: property.StatusChangeTimestamp,
+      PublicRemarks: property.PublicRemarks,
+      ListPrice: property.ListPrice,
+      OriginatingSystemName: property.OriginatingSystemName,
+      PhotosCount: property.PhotosCount,
+      PhotosChangeTimestamp: property.PhotosChangeTimestamp,
+      CommonInterest: property.CommonInterest,
 
-      // Flattened Address fields
-      "UnparsedAddress": property.Address?.UnparsedAddress || property.UnparsedAddress || null,
-      "City": property.Address?.City || property.City || 'Unknown',
-      "PostalCode": property.Address?.PostalCode || property.PostalCode || null,
-      "CommunityName": property.Address?.CommunityName || property.City || 'Unknown',
-      "SubdivisionName": property.SubdivisionName,
-      "Neighbourhood": property.Neighbourhood,
-      "Directions": property.Directions,
-      "Latitude": property.Latitude,
-      "Longitude": property.Longitude,
-      "CityRegion": property.CityRegion,
+      // ✅ Flattened Address fields
+      UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
+      City: property.Address?.City || property.City || 'Unknown',
+      PostalCode: property.Address?.PostalCode || property.PostalCode || null,
+      CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
+      SubdivisionName: property.SubdivisionName,
+      Neighbourhood: property.Neighbourhood,
+      Directions: property.Directions,
+      Latitude: property.Latitude,
+      Longitude: property.Longitude,
+      CityRegion: property.CityRegion,
 
-      // Property details
-      "ParkingTotal": property.ParkingTotal,
-      "YearBuilt": property.YearBuilt,
-      "BathroomsPartial": property.BathroomsPartial,
-      "BathroomsTotalInteger": property.BathroomsTotalInteger,
-      "BedroomsTotal": property.BedroomsTotal,
-      "BuildingAreaTotal": property.BuildingAreaTotal,
-      "BuildingAreaUnits": property.BuildingAreaUnits,
-      "BuildingFeatures": property.BuildingFeatures,
-      "AboveGradeFinishedArea": property.AboveGradeFinishedArea,
-      "BelowGradeFinishedArea": property.BelowGradeFinishedArea,
-      "LivingArea": property.LivingArea,
-      "FireplacesTotal": property.FireplacesTotal,
-      "ArchitecturalStyle": property.ArchitecturalStyle,
-      "Heating": property.Heating,
-      "FoundationDetails": property.FoundationDetails,
-      "Basement": property.Basement,
-      "ExteriorFeatures": property.ExteriorFeatures,
-      "Flooring": property.Flooring,
-      "ParkingFeatures": property.ParkingFeatures,
-      "Cooling": property.Cooling,
-      "IrrigationSource": property.IrrigationSource,
-      "WaterSource": property.WaterSource,
-      "Utilities": property.Utilities,
-      "Sewer": property.Sewer,
-      "Roof": property.Roof,
-      "ConstructionMaterials": property.ConstructionMaterials,
-      "Stories": property.Stories,
-      "PropertyAttachedYN": property.PropertyAttachedYN,
-      "BedroomsAboveGrade": property.BedroomsAboveGrade,
-      "BedroomsBelowGrade": property.BedroomsBelowGrade,
-      "TaxAnnualAmount": property.TaxAnnualAmount,
-      "TaxYear": property.TaxYear,
-      "Media": property.Media,
-      "Rooms": property.Rooms,
-      "StructureType": property.StructureType,
-      "ListingURL": property.ListingURL,
+      // ✅ Property details
+      ParkingTotal: property.ParkingTotal,
+      YearBuilt: property.YearBuilt,
+      BathroomsPartial: property.BathroomsPartial,
+      BathroomsTotalInteger: property.BathroomsTotalInteger,
+      BedroomsTotal: property.BedroomsTotal,
+      BuildingAreaTotal: property.BuildingAreaTotal,
+      BuildingAreaUnits: property.BuildingAreaUnits,
+      BuildingFeatures: property.BuildingFeatures,
+      AboveGradeFinishedArea: property.AboveGradeFinishedArea,
+      BelowGradeFinishedArea: property.BelowGradeFinishedArea,
+      LivingArea: property.LivingArea,
+      FireplacesTotal: property.FireplacesTotal,
+      ArchitecturalStyle: property.ArchitecturalStyle,
+      Heating: property.Heating,
+      FoundationDetails: property.FoundationDetails,
+      Basement: property.Basement,
+      ExteriorFeatures: property.ExteriorFeatures,
+      Flooring: property.Flooring,
+      ParkingFeatures: property.ParkingFeatures,
+      Cooling: property.Cooling,
+      IrrigationSource: property.IrrigationSource,
+      WaterSource: property.WaterSource,
+      Utilities: property.Utilities,
+      Sewer: property.Sewer,
+      Roof: property.Roof,
+      ConstructionMaterials: property.ConstructionMaterials,
+      Stories: property.Stories,
+      PropertyAttachedYN: property.PropertyAttachedYN,
+      BedroomsAboveGrade: property.BedroomsAboveGrade,
+      BedroomsBelowGrade: property.BedroomsBelowGrade,
+      TaxAnnualAmount: property.TaxAnnualAmount,
+      TaxYear: property.TaxYear,
+      Media: property.Media,
+      Rooms: property.Rooms,
+      StructureType: property.StructureType,
+      ListingURL: property.ListingURL,
     };
   });
 }
@@ -160,33 +160,36 @@ async function savePropertiesToSupabase(properties, counters) {
   for (let i = 0; i < properties.length; i += batchSize) {
     const batch = properties.slice(i, i + batchSize);
 
+    // Check existing
     const keys = batch.map(p => p.ListingKey);
     const { data: existingData } = await supabase
       .from('property')
-      .select('"ListingKey"')
+      .select('ListingKey')
       .in('ListingKey', keys);
 
     const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
     batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-    const { error } = await supabase
-      .from('property')
-      .upsert(batch, { onConflict: ['ListingKey'] });
-
+    // ✅ upsert on ListingKey (primary key)
+    const { error } = await supabase.from('property').upsert(batch, {
+      onConflict: ['ListingKey'],
+    });
     if (error) console.error('Error saving batch:', error.message);
 
     showProgress(counters);
   }
 }
 
+
 // =====================
-// Delete non-matching properties
+// Delete non-matching (fixed with chunking)
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
   try {
+    // 1. Fetch existing keys from Supabase
     const { data: existingKeys, error: fetchError } = await supabase
       .from('property')
-      .select('"ListingKey"');
+      .select('ListingKey');
 
     if (fetchError) {
       console.error('Error fetching existing keys for deletion:', fetchError.message);
@@ -195,14 +198,18 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
 
     const existingSet = new Set(existingKeys.map(r => r.ListingKey));
     const latestSet = new Set(listingKeys);
+
+    // 2. Find which keys need deletion
     const toDelete = [...existingSet].filter(key => !latestSet.has(key));
 
-    if (!toDelete.length) {
+    if (toDelete.length === 0) {
       console.log('No properties to delete.');
       return;
     }
 
     console.log(`Preparing to delete ${toDelete.length} old properties...`);
+
+    // 3. Delete in chunks (avoid Postgres parameter limit ~65k)
     const chunkSize = 500;
     let deletedCount = 0;
 
@@ -212,7 +219,7 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
         .from('property')
         .delete()
         .in('ListingKey', chunk)
-        .select('"ListingKey"');
+        .select('ListingKey');
 
       if (error) {
         console.error(`Error deleting chunk at ${i}:`, error.message);
@@ -223,11 +230,14 @@ async function deleteNonMatchingProperties(listingKeys, counters) {
     }
 
     counters.deleted = deletedCount;
+    console.log(`\n✅ Deleted total: ${deletedCount} properties not in latest fetch`);
+
     showProgress(counters);
   } catch (err) {
     console.error('Fatal deletion error:', err.message);
   }
 }
+
 
 // =====================
 // Fetch & process DDF
@@ -251,6 +261,7 @@ async function fetchAndProcessDDFProperties() {
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
       const mappedProperties = mapProperties(data.value, officeDetails);
       await savePropertiesToSupabase(mappedProperties, counters);
 
