@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
 // ---------------- Supabase Setup ----------------
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; // can also read from env if you want
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co'; 
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
@@ -38,9 +38,17 @@ async function updateCities() {
     if (error) throw error;
 
     for (const city of cities) {
+      if (!city.City) continue;
       console.log(`⏳ Processing ${city.City}...`);
 
-      const coords = await geocodeCity(city.City);
+      let coords = await geocodeCity(city.City);
+
+      // fallback if not found: strip anything in parentheses
+      if (!coords && city.City.includes('(')) {
+        const parentCity = city.City.replace(/\(.*?\)/g, '').trim();
+        console.log(`   🔄 Retrying with parent city: ${parentCity}`);
+        coords = await geocodeCity(parentCity);
+      }
 
       if (coords) {
         const { error: updateError } = await supabase
