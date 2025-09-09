@@ -104,7 +104,6 @@ function mapProperties(properties, officeDetails) {
       City: property.Address?.City || property.City || 'Unknown',
       UnitNumber: property.Address?.UnitNumber || property.UnitNumber || null,
       PostalCode: property.Address?.PostalCode || property.PostalCode || null,
-      CommunityName: property.Address?.CommunityName || property.City || 'Unknown',
       SubdivisionName: property.SubdivisionName,
       Directions: property.Directions,
       Latitude: property.Latitude,
