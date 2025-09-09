@@ -132,7 +132,6 @@ function mapProperties(properties, officeDetails) {
       Flooring: property.Flooring,
       ParkingFeatures: property.ParkingFeatures,
       Cooling: property.Cooling,
-      IrrigationSource: property.IrrigationSource,
       WaterSource: property.WaterSource,
       Utilities: property.Utilities,
       Sewer: property.Sewer,
