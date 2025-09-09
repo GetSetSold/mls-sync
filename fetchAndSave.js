@@ -139,7 +139,6 @@ function mapProperties(properties, officeDetails) {
       Roof: property.Roof,
       ConstructionMaterials: property.ConstructionMaterials,
       Stories: property.Stories,
-      PropertyAttachedYN: property.PropertyAttachedYN,
       BedroomsAboveGrade: property.BedroomsAboveGrade,
       BedroomsBelowGrade: property.BedroomsBelowGrade,
       TaxAnnualAmount: property.TaxAnnualAmount,
