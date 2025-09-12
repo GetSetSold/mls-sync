@@ -102,6 +102,7 @@ function mapProperties(properties, officeDetails) {
       UnparsedAddress: property.Address?.UnparsedAddress || property.UnparsedAddress || null,
       City: property.Address?.City || property.City || 'Unknown',
       UnitNumber: property.Address?.UnitNumber || property.UnitNumber || null,
+      Province: property.Address?.Province || property.Province || "ON",
       PostalCode: property.Address?.PostalCode || property.PostalCode || null,
       SubdivisionName: property.SubdivisionName,
       Directions: property.Directions,
