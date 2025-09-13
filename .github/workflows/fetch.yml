@@ -1,4 +1,4 @@
-name: DDF Supabase Sync
+name: DDF Property Sync
 
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
         run: npm install
 
       - name: Run DDF fetch script
-        run: node fetchAndSave.js
+        run: node fetch-property.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
