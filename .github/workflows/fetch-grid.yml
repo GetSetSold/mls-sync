@@ -1,0 +1,31 @@
+name: DDF Grid Sync
+
+on:
+  schedule:
+    # 9:00 AM ET and 9:30 AM ET (convert to UTC)
+    - cron: '0 13 * * *'    # 9:00 AM ET → 13:00 UTC
+    - cron: '30 13 * * *'   # 9:30 AM ET → 13:30 UTC
+  workflow_dispatch:
+
+jobs:
+  fetch-and-save:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run DDF Grid fetch script
+        run: node fetch-grid.js
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
