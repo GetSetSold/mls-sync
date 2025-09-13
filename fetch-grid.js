@@ -69,7 +69,7 @@ function mapPropertiesForGrid(properties) {
       PostalCode: p.Address?.PostalCode || p.PostalCode || null,
       Latitude: p.Latitude,
       Longitude: p.Longitude,
-      CityRegion: p.CityRegion,
+     
 
       // Property details
       ParkingTotal: p.ParkingTotal,
