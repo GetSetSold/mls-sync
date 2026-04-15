@@ -76,6 +76,7 @@ function mapPropertiesForGrid(properties) {
       BathroomsTotalInteger: p.BathroomsTotalInteger,
       BedroomsTotal: p.BedroomsTotal,
       AboveGradeFinishedArea: p.AboveGradeFinishedArea,
+      StructureTypeText: p.StructureType,
     };
   });
 }
