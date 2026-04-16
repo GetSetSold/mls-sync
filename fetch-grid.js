@@ -53,6 +53,15 @@ function mapPropertiesForGrid(properties) {
       if (photo) firstPhoto = photo.MediaURL;
     }
 
+    // Extract StructureType as plain text (array → first element)
+    // DDF returns StructureType as e.g. ["House"] or ["Row / Townhouse"]
+    let structureTypeText = null;
+    if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
+      structureTypeText = p.StructureType[0];
+    } else if (p.StructureType && typeof p.StructureType === 'string') {
+      structureTypeText = p.StructureType;
+    }
+
     return {
       ListingKey: p.ListingKey,
       TotalActualRent: p.TotalActualRent,
@@ -69,14 +78,15 @@ function mapPropertiesForGrid(properties) {
       PostalCode: p.Address?.PostalCode || p.PostalCode || null,
       Latitude: p.Latitude,
       Longitude: p.Longitude,
-     
 
       // Property details
       ParkingTotal: p.ParkingTotal,
       BathroomsTotalInteger: p.BathroomsTotalInteger,
       BedroomsTotal: p.BedroomsTotal,
       AboveGradeFinishedArea: p.AboveGradeFinishedArea,
-      StructureTypeText: p.StructureType,
+
+      // Structure type as plain text (for PostgREST filtering)
+      StructureTypeText: structureTypeText,
     };
   });
 }
@@ -178,7 +188,7 @@ async function fetchAndProcessDDFProperties() {
     await deleteNonMatchingProperties(allFetchedKeys, counters);
   }
 
-  console.log(`\n✅ Grid sync complete. Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
+  console.log(`\n Grid sync complete. Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
 }
 
 // =====================
