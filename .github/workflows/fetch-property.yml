@@ -2,7 +2,7 @@ name: DDF Property Sync
 
 on:
   schedule:
-     - cron: '0 13 * * *'   # 9:00 AM ET
+    - cron: '30 */4 * * *'  # every 4 hours at :30
   workflow_dispatch:
 
 jobs:
