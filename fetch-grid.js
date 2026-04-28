@@ -1,4 +1,3 @@
-// grid-sync.js
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -17,19 +16,13 @@ function showProgress(counters) {
   );
 }
 
-// =====================
-// Map from property row → grid row
-// No DDF fetch needed — data already in property table
-// =====================
 function mapPropertyToGrid(p) {
-  // Extract first photo URL from Media array stored in property table
   let firstPhoto = null;
   if (Array.isArray(p.Media)) {
     const photo = p.Media.find(m => m.Order === 1);
     firstPhoto = photo?.MediaURL || null;
   }
 
-  // StructureType stored as array in property — extract text
   let structureTypeText = null;
   if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
     structureTypeText = p.StructureType[0];
@@ -39,7 +32,9 @@ function mapPropertyToGrid(p) {
 
   return {
     ListingKey: p.ListingKey,
-    ModificationTimestamp: p.ModificationTimestamp, // needed for delta checks
+    ModificationTimestamp: p.ModificationTimestamp
+      ? new Date(p.ModificationTimestamp).toISOString()
+      : null,
     TotalActualRent: p.TotalActualRent,
     OriginalEntryTimestamp: p.OriginalEntryTimestamp,
     ListPrice: p.ListPrice,
@@ -60,51 +55,71 @@ function mapPropertyToGrid(p) {
   };
 }
 
-// =====================
-// Delta check against grid table
-// Only returns rows where ModificationTimestamp differs
-// =====================
 async function filterChanged(batch) {
   const keys = batch.map(p => p.ListingKey);
 
-  const { data: existing } = await supabase
+  const { data: existing, error } = await supabase
     .from('grid')
     .select('ListingKey, ModificationTimestamp')
     .in('ListingKey', keys);
 
+  if (error) {
+    console.error('\nDelta check error (upserting full batch as fallback):', JSON.stringify(error));
+    return batch;
+  }
+
   const existingMap = new Map(
-    (existing || []).map(r => [r.ListingKey, r.ModificationTimestamp])
+    (existing || []).map(r => [
+      r.ListingKey,
+      r.ModificationTimestamp ? new Date(r.ModificationTimestamp).toISOString() : null
+    ])
   );
 
   return batch.filter(p => {
-    const existingTs = existingMap.get(p.ListingKey);
-    return !existingTs || p.ModificationTimestamp !== existingTs;
+    const storedTs = existingMap.get(p.ListingKey);
+    return !storedTs || p.ModificationTimestamp !== storedTs;
   });
 }
 
-// =====================
-// Delete grid rows no longer in property table
-// =====================
 async function deleteRemovedFromGrid(allPropertyKeys, counters) {
-  console.log('\nChecking for removed grid listings...');
-
-  const { data: existing } = await supabase
-    .from('grid')
-    .select('ListingKey');
-
-  if (!existing?.length) return;
+  console.log('\nFetching grid keys for deletion check (paginated)...');
 
   const latestSet = new Set(allPropertyKeys);
-  const toDelete = existing
-    .map(r => r.ListingKey)
-    .filter(key => !latestSet.has(key));
+  const toDelete = [];
+  const pageSize = 1000;
+  let from = 0;
+  let hasMore = true;
 
-  if (!toDelete.length) {
-    console.log('Nothing to delete from grid.');
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('grid')
+      .select('ListingKey')
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.error('\nError fetching grid keys:', JSON.stringify(error));
+      break;
+    }
+
+    if (!data || data.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    data.forEach(r => {
+      if (!latestSet.has(r.ListingKey)) toDelete.push(r.ListingKey);
+    });
+
+    from += pageSize;
+    hasMore = data.length === pageSize;
+  }
+
+  if (toDelete.length === 0) {
+    console.log('\nNothing to delete from grid.');
     return;
   }
 
-  console.log(`Deleting ${toDelete.length} removed listings from grid...`);
+  console.log(`\nDeleting ${toDelete.length} expired listings from grid...`);
 
   const chunkSize = 500;
   for (let i = 0; i < toDelete.length; i += chunkSize) {
@@ -114,23 +129,23 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
       .delete()
       .in('ListingKey', chunk);
 
-    if (error) console.error(`Delete error at chunk ${i}:`, error.message);
-    else counters.deleted += chunk.length;
+    if (error) {
+      console.error(`\nDelete error:`, JSON.stringify(error));
+    } else {
+      counters.deleted += chunk.length;
+    }
 
     await new Promise(r => setTimeout(r, 200));
+    showProgress(counters);
   }
 }
 
-// =====================
-// Main sync — reads from property table, writes to grid
-// =====================
 async function syncGridFromProperty() {
   const counters = { processed: 0, upserted: 0, skipped: 0, deleted: 0 };
   const allPropertyKeys = [];
 
   console.log('Reading from property table...');
 
-  // Paginate through property table in batches
   const pageSize = 1000;
   let from = 0;
   let hasMore = true;
@@ -148,7 +163,7 @@ async function syncGridFromProperty() {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      console.error('Error reading property table:', error.message);
+      console.error('\nError reading property table:', JSON.stringify(error));
       break;
     }
 
@@ -161,19 +176,18 @@ async function syncGridFromProperty() {
     allPropertyKeys.push(...gridRows.map(r => r.ListingKey));
     counters.processed += gridRows.length;
 
-    // Delta check — only write what changed
     const changed = await filterChanged(gridRows);
     counters.skipped += gridRows.length - changed.length;
 
-    // Write in batches with delay
     for (let i = 0; i < changed.length; i += BATCH_SIZE) {
       const chunk = changed.slice(i, i + BATCH_SIZE);
+
       const { error: upsertError } = await supabase
         .from('grid')
         .upsert(chunk, { onConflict: 'ListingKey' });
 
       if (upsertError) {
-        console.error('Upsert error:', upsertError.message);
+        console.error('\nGrid upsert error:', JSON.stringify(upsertError));
       } else {
         counters.upserted += chunk.length;
       }
@@ -188,19 +202,15 @@ async function syncGridFromProperty() {
     hasMore = rows.length === pageSize;
   }
 
-  // Clean up stale grid rows
   await deleteRemovedFromGrid(allPropertyKeys, counters);
 
   console.log('\n\n✅ Grid sync complete');
   console.log(`Processed: ${counters.processed} | Upserted: ${counters.upserted} | Skipped: ${counters.skipped} | Deleted: ${counters.deleted}`);
 }
 
-// =====================
-// Entry point
-// =====================
 (async function main() {
   try {
-    console.log('Starting grid sync from property table...');
+    console.log('Starting grid sync...');
     await syncGridFromProperty();
     process.exit(0);
   } catch (error) {
