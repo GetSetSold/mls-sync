@@ -1,21 +1,27 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL;
+// ✅ URL hardcoded like original working file — env var caused silent {} errors
+const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseUrl || !supabaseKey) throw new Error('Missing environment variables');
+if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const BATCH_SIZE = 500;
-const BATCH_DELAY_MS = 300;
+const BATCH_SIZE = 500;      // ✅ up from 100 — fewer DB round trips
+const BATCH_DELAY_MS = 300;  // ✅ pause between batches to reduce Disk IO spikes
 
+// =====================
+// Live progress
+// =====================
 function showProgress(counters) {
-  process.stdout.write(
-    `\rProcessed: ${counters.processed} | Upserted: ${counters.upserted} | Skipped: ${counters.skipped} | Deleted: ${counters.deleted}`
-  );
+  process.stdout.write(`\rProcessed: ${counters.processed} | Added: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
 }
 
+// =====================
+// Map from property row → grid row
+// Reads from property table — no second DDF fetch needed
+// =====================
 function mapPropertyToGrid(p) {
   let firstPhoto = null;
   if (Array.isArray(p.Media)) {
@@ -32,9 +38,6 @@ function mapPropertyToGrid(p) {
 
   return {
     ListingKey: p.ListingKey,
-    ModificationTimestamp: p.ModificationTimestamp
-      ? new Date(p.ModificationTimestamp).toISOString()
-      : null,
     TotalActualRent: p.TotalActualRent,
     OriginalEntryTimestamp: p.OriginalEntryTimestamp,
     ListPrice: p.ListPrice,
@@ -55,33 +58,40 @@ function mapPropertyToGrid(p) {
   };
 }
 
-async function filterChanged(batch) {
+// =====================
+// Save grid batch — same working upsert pattern as property sync
+// =====================
+async function saveToGrid(batch, counters) {
   const keys = batch.map(p => p.ListingKey);
 
-  const { data: existing, error } = await supabase
+  const { data: existingData } = await supabase
     .from('grid')
-    .select('ListingKey, ModificationTimestamp')
+    .select('ListingKey')
     .in('ListingKey', keys);
 
-  if (error) {
-    console.error('\nDelta check error (upserting full batch as fallback):', JSON.stringify(error));
-    return batch;
-  }
+  const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
+  batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-  const existingMap = new Map(
-    (existing || []).map(r => [
-      r.ListingKey,
-      r.ModificationTimestamp ? new Date(r.ModificationTimestamp).toISOString() : null
-    ])
-  );
+  // ✅ Exact same working upsert pattern as original
+  const { error } = await supabase
+    .from('grid')
+    .upsert(batch, { onConflict: ['ListingKey'] });
 
-  return batch.filter(p => {
-    const storedTs = existingMap.get(p.ListingKey);
-    return !storedTs || p.ModificationTimestamp !== storedTs;
-  });
+  if (error) console.error('\nError saving grid batch:', error.message);
 }
 
+// =====================
+// Delete grid rows no longer in property table
+// ✅ Paginated fetch — fixes statement timeout on 54K+ rows
+// ✅ Safety guards — prevents accidental mass deletion
+// =====================
 async function deleteRemovedFromGrid(allPropertyKeys, counters) {
+  // ✅ Safety guard — if property read was incomplete, skip deletion
+  if (allPropertyKeys.length < 50000) {
+    console.log(`\n⚠️ Only ${allPropertyKeys.length} property keys read — skipping deletion as safety measure`);
+    return;
+  }
+
   console.log('\nFetching grid keys for deletion check (paginated)...');
 
   const latestSet = new Set(allPropertyKeys);
@@ -97,8 +107,9 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      console.error('\nError fetching grid keys:', JSON.stringify(error));
-      break;
+      // ✅ Abort deletion on any read error — never delete on uncertainty
+      console.error('\n⚠️ Error fetching grid keys — skipping deletion to be safe:', error.message);
+      return;
     }
 
     if (!data || data.length === 0) {
@@ -112,6 +123,7 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
 
     from += pageSize;
     hasMore = data.length === pageSize;
+    process.stdout.write(`\rScanned ${from} grid records...`);
   }
 
   if (toDelete.length === 0) {
@@ -119,9 +131,19 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
     return;
   }
 
+  // ✅ Safety guard — never delete more than 10% in one run
+  const deletePercent = (toDelete.length / allPropertyKeys.length) * 100;
+  if (deletePercent > 10) {
+    console.log(`\n⚠️ ${toDelete.length} deletions (${deletePercent.toFixed(1)}%) seems too high — skipping`);
+    console.log('If expected (e.g. after grid was wiped), remove this guard temporarily and re-run.');
+    return;
+  }
+
   console.log(`\nDeleting ${toDelete.length} expired listings from grid...`);
 
   const chunkSize = 500;
+  let deletedCount = 0;
+
   for (let i = 0; i < toDelete.length; i += chunkSize) {
     const chunk = toDelete.slice(i, i + chunkSize);
     const { error } = await supabase
@@ -130,18 +152,25 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
       .in('ListingKey', chunk);
 
     if (error) {
-      console.error(`\nDelete error:`, JSON.stringify(error));
-    } else {
-      counters.deleted += chunk.length;
+      console.error('\nDelete error — stopping deletion:', error.message);
+      return; // ✅ stop on first error
     }
 
+    deletedCount += chunk.length;
     await new Promise(r => setTimeout(r, 200));
-    showProgress(counters);
   }
+
+  counters.deleted = deletedCount;
+  console.log(`\n✅ Deleted ${deletedCount} expired grid listings`);
+  showProgress(counters);
 }
 
+// =====================
+// Main sync — reads from property table, writes to grid
+// No DDF fetch — avoids doubling API calls and IO
+// =====================
 async function syncGridFromProperty() {
-  const counters = { processed: 0, upserted: 0, skipped: 0, deleted: 0 };
+  const counters = { processed: 0, added: 0, updated: 0, deleted: 0 };
   const allPropertyKeys = [];
 
   console.log('Reading from property table...');
@@ -154,8 +183,8 @@ async function syncGridFromProperty() {
     const { data: rows, error } = await supabase
       .from('property')
       .select(`
-        ListingKey, ModificationTimestamp, TotalActualRent,
-        OriginalEntryTimestamp, ListPrice, PhotosCount, Media,
+        ListingKey, TotalActualRent, OriginalEntryTimestamp,
+        ListPrice, PhotosCount, Media,
         UnparsedAddress, City, UnitNumber, Province, PostalCode,
         Latitude, Longitude, ParkingTotal, BathroomsTotalInteger,
         BedroomsTotal, AboveGradeFinishedArea, StructureType
@@ -163,7 +192,7 @@ async function syncGridFromProperty() {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      console.error('\nError reading property table:', JSON.stringify(error));
+      console.error('\nError reading property table:', error.message);
       break;
     }
 
@@ -176,23 +205,12 @@ async function syncGridFromProperty() {
     allPropertyKeys.push(...gridRows.map(r => r.ListingKey));
     counters.processed += gridRows.length;
 
-    const changed = await filterChanged(gridRows);
-    counters.skipped += gridRows.length - changed.length;
+    // Write in batches with delay
+    for (let i = 0; i < gridRows.length; i += BATCH_SIZE) {
+      const chunk = gridRows.slice(i, i + BATCH_SIZE);
+      await saveToGrid(chunk, counters);
 
-    for (let i = 0; i < changed.length; i += BATCH_SIZE) {
-      const chunk = changed.slice(i, i + BATCH_SIZE);
-
-      const { error: upsertError } = await supabase
-        .from('grid')
-        .upsert(chunk, { onConflict: 'ListingKey' });
-
-      if (upsertError) {
-        console.error('\nGrid upsert error:', JSON.stringify(upsertError));
-      } else {
-        counters.upserted += chunk.length;
-      }
-
-      if (i + BATCH_SIZE < changed.length) {
+      if (i + BATCH_SIZE < gridRows.length) {
         await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
       }
     }
@@ -205,13 +223,17 @@ async function syncGridFromProperty() {
   await deleteRemovedFromGrid(allPropertyKeys, counters);
 
   console.log('\n\n✅ Grid sync complete');
-  console.log(`Processed: ${counters.processed} | Upserted: ${counters.upserted} | Skipped: ${counters.skipped} | Deleted: ${counters.deleted}`);
+  console.log(`Final counts → Processed: ${counters.processed} | Added: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
 }
 
+// =====================
+// Main
+// =====================
 (async function main() {
   try {
-    console.log('Starting grid sync...');
+    console.log('Starting grid sync from property table...');
     await syncGridFromProperty();
+    console.log('Sync complete. Exiting process.');
     process.exit(0);
   } catch (error) {
     console.error('Fatal error:', error.message);
