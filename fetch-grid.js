@@ -1,204 +1,207 @@
 // grid-sync.js
 import { createClient } from '@supabase/supabase-js';
-import fetch from 'node-fetch';
 
-const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
+const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
+if (!supabaseUrl || !supabaseKey) throw new Error('Missing environment variables');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// CREA DDF API
-const TOKEN_URL = 'https://identity.crea.ca/connect/token';
-const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
-const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
-const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
+const BATCH_SIZE = 500;
+const BATCH_DELAY_MS = 300;
 
-// =====================
-// Live progress
-// =====================
 function showProgress(counters) {
-  process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
+  process.stdout.write(
+    `\rProcessed: ${counters.processed} | Upserted: ${counters.upserted} | Skipped: ${counters.skipped} | Deleted: ${counters.deleted}`
+  );
 }
 
 // =====================
-// Fetch DDF access token
+// Map from property row → grid row
+// No DDF fetch needed — data already in property table
 // =====================
-async function getAccessToken() {
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      scope: 'DDFApi_Read',
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error_description || 'Failed to fetch DDF token');
-  return data.access_token;
+function mapPropertyToGrid(p) {
+  // Extract first photo URL from Media array stored in property table
+  let firstPhoto = null;
+  if (Array.isArray(p.Media)) {
+    const photo = p.Media.find(m => m.Order === 1);
+    firstPhoto = photo?.MediaURL || null;
+  }
+
+  // StructureType stored as array in property — extract text
+  let structureTypeText = null;
+  if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
+    structureTypeText = p.StructureType[0];
+  } else if (typeof p.StructureType === 'string') {
+    structureTypeText = p.StructureType;
+  }
+
+  return {
+    ListingKey: p.ListingKey,
+    ModificationTimestamp: p.ModificationTimestamp, // needed for delta checks
+    TotalActualRent: p.TotalActualRent,
+    OriginalEntryTimestamp: p.OriginalEntryTimestamp,
+    ListPrice: p.ListPrice,
+    PhotosCount: p.PhotosCount,
+    Media: firstPhoto,
+    UnparsedAddress: p.UnparsedAddress,
+    City: p.City,
+    UnitNumber: p.UnitNumber,
+    Province: p.Province,
+    PostalCode: p.PostalCode,
+    Latitude: p.Latitude,
+    Longitude: p.Longitude,
+    ParkingTotal: p.ParkingTotal,
+    BathroomsTotalInteger: p.BathroomsTotalInteger,
+    BedroomsTotal: p.BedroomsTotal,
+    AboveGradeFinishedArea: p.AboveGradeFinishedArea,
+    StructureTypeText: structureTypeText,
+  };
 }
 
 // =====================
-// Map properties for grid
+// Delta check against grid table
+// Only returns rows where ModificationTimestamp differs
 // =====================
-function mapPropertiesForGrid(properties) {
-  return properties.map(p => {
-    // Get first photo with Order=1
-    let firstPhoto = null;
-    if (Array.isArray(p.Media)) {
-      const photo = p.Media.find(m => m.Order === 1);
-      if (photo) firstPhoto = photo.MediaURL;
-    }
+async function filterChanged(batch) {
+  const keys = batch.map(p => p.ListingKey);
 
-    // Extract StructureType as plain text (array → first element)
-    // DDF returns StructureType as e.g. ["House"] or ["Row / Townhouse"]
-    let structureTypeText = null;
-    if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
-      structureTypeText = p.StructureType[0];
-    } else if (p.StructureType && typeof p.StructureType === 'string') {
-      structureTypeText = p.StructureType;
-    }
+  const { data: existing } = await supabase
+    .from('grid')
+    .select('ListingKey, ModificationTimestamp')
+    .in('ListingKey', keys);
 
-    return {
-      ListingKey: p.ListingKey,
-      TotalActualRent: p.TotalActualRent,
-      OriginalEntryTimestamp: p.OriginalEntryTimestamp,
-      ListPrice: p.ListPrice,
-      PhotosCount: p.PhotosCount,
-      Media: firstPhoto, // only first photo
+  const existingMap = new Map(
+    (existing || []).map(r => [r.ListingKey, r.ModificationTimestamp])
+  );
 
-      // Flattened address
-      UnparsedAddress: p.Address?.UnparsedAddress || p.UnparsedAddress || null,
-      City: p.Address?.City || p.City || 'Unknown',
-      UnitNumber: p.Address?.UnitNumber || p.UnitNumber || null,
-      Province: p.Address?.Province || p.Province || 'ON',
-      PostalCode: p.Address?.PostalCode || p.PostalCode || null,
-      Latitude: p.Latitude,
-      Longitude: p.Longitude,
-
-      // Property details
-      ParkingTotal: p.ParkingTotal,
-      BathroomsTotalInteger: p.BathroomsTotalInteger,
-      BedroomsTotal: p.BedroomsTotal,
-      AboveGradeFinishedArea: p.AboveGradeFinishedArea,
-
-      // Structure type as plain text (for PostgREST filtering)
-      StructureTypeText: structureTypeText,
-    };
+  return batch.filter(p => {
+    const existingTs = existingMap.get(p.ListingKey);
+    return !existingTs || p.ModificationTimestamp !== existingTs;
   });
 }
 
 // =====================
-// Save properties to grid
+// Delete grid rows no longer in property table
 // =====================
-async function savePropertiesToGrid(properties, counters) {
-  const batchSize = 100;
-  for (let i = 0; i < properties.length; i += batchSize) {
-    const batch = properties.slice(i, i + batchSize);
+async function deleteRemovedFromGrid(allPropertyKeys, counters) {
+  console.log('\nChecking for removed grid listings...');
 
-    const keys = batch.map(p => p.ListingKey);
-    const { data: existingData } = await supabase
+  const { data: existing } = await supabase
+    .from('grid')
+    .select('ListingKey');
+
+  if (!existing?.length) return;
+
+  const latestSet = new Set(allPropertyKeys);
+  const toDelete = existing
+    .map(r => r.ListingKey)
+    .filter(key => !latestSet.has(key));
+
+  if (!toDelete.length) {
+    console.log('Nothing to delete from grid.');
+    return;
+  }
+
+  console.log(`Deleting ${toDelete.length} removed listings from grid...`);
+
+  const chunkSize = 500;
+  for (let i = 0; i < toDelete.length; i += chunkSize) {
+    const chunk = toDelete.slice(i, i + chunkSize);
+    const { error } = await supabase
       .from('grid')
-      .select('ListingKey')
-      .in('ListingKey', keys);
+      .delete()
+      .in('ListingKey', chunk);
 
-    const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
-    batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
+    if (error) console.error(`Delete error at chunk ${i}:`, error.message);
+    else counters.deleted += chunk.length;
 
-    const { error } = await supabase.from('grid').upsert(batch, { onConflict: ['ListingKey'] });
-    if (error) console.error('Error saving batch:', error.message);
-
-    showProgress(counters);
+    await new Promise(r => setTimeout(r, 200));
   }
 }
 
 // =====================
-// Delete non-matching listings from grid
+// Main sync — reads from property table, writes to grid
 // =====================
-async function deleteNonMatchingProperties(listingKeys, counters) {
-  try {
-    const { data: existingKeys, error: fetchError } = await supabase
-      .from('grid')
-      .select('ListingKey');
+async function syncGridFromProperty() {
+  const counters = { processed: 0, upserted: 0, skipped: 0, deleted: 0 };
+  const allPropertyKeys = [];
 
-    if (fetchError) {
-      console.error('Error fetching existing keys for deletion:', fetchError.message);
-      return;
+  console.log('Reading from property table...');
+
+  // Paginate through property table in batches
+  const pageSize = 1000;
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data: rows, error } = await supabase
+      .from('property')
+      .select(`
+        ListingKey, ModificationTimestamp, TotalActualRent,
+        OriginalEntryTimestamp, ListPrice, PhotosCount, Media,
+        UnparsedAddress, City, UnitNumber, Province, PostalCode,
+        Latitude, Longitude, ParkingTotal, BathroomsTotalInteger,
+        BedroomsTotal, AboveGradeFinishedArea, StructureType
+      `)
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.error('Error reading property table:', error.message);
+      break;
     }
 
-    const existingSet = new Set(existingKeys.map(r => r.ListingKey));
-    const latestSet = new Set(listingKeys);
-    const toDelete = [...existingSet].filter(key => !latestSet.has(key));
+    if (!rows || rows.length === 0) {
+      hasMore = false;
+      break;
+    }
 
-    if (!toDelete.length) return;
+    const gridRows = rows.map(mapPropertyToGrid);
+    allPropertyKeys.push(...gridRows.map(r => r.ListingKey));
+    counters.processed += gridRows.length;
 
-    const chunkSize = 500;
-    let deletedCount = 0;
-    for (let i = 0; i < toDelete.length; i += chunkSize) {
-      const chunk = toDelete.slice(i, i + chunkSize);
-      const { data, error } = await supabase
+    // Delta check — only write what changed
+    const changed = await filterChanged(gridRows);
+    counters.skipped += gridRows.length - changed.length;
+
+    // Write in batches with delay
+    for (let i = 0; i < changed.length; i += BATCH_SIZE) {
+      const chunk = changed.slice(i, i + BATCH_SIZE);
+      const { error: upsertError } = await supabase
         .from('grid')
-        .delete()
-        .in('ListingKey', chunk)
-        .select('ListingKey');
+        .upsert(chunk, { onConflict: 'ListingKey' });
 
-      if (error) console.error(`Error deleting chunk at ${i}:`, error.message);
-      else deletedCount += data.length;
+      if (upsertError) {
+        console.error('Upsert error:', upsertError.message);
+      } else {
+        counters.upserted += chunk.length;
+      }
+
+      if (i + BATCH_SIZE < changed.length) {
+        await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+      }
     }
 
-    counters.deleted = deletedCount;
     showProgress(counters);
-  } catch (err) {
-    console.error('Fatal deletion error:', err.message);
+    from += pageSize;
+    hasMore = rows.length === pageSize;
   }
+
+  // Clean up stale grid rows
+  await deleteRemovedFromGrid(allPropertyKeys, counters);
+
+  console.log('\n\n✅ Grid sync complete');
+  console.log(`Processed: ${counters.processed} | Upserted: ${counters.upserted} | Skipped: ${counters.skipped} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
-// Fetch & process DDF properties
-// =====================
-async function fetchAndProcessDDFProperties() {
-  const counters = { added: 0, updated: 0, deleted: 0 };
-  const token = await getAccessToken();
-  let nextLink = `${PROPERTY_URL}?$top=100`;
-  const allFetchedKeys = [];
-
-  while (nextLink) {
-    try {
-      console.log(`\nFetching properties: ${nextLink}`);
-      const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await response.json();
-
-      if (!data.value) throw new Error('Missing value array in DDF response');
-
-      const mappedProperties = mapPropertiesForGrid(data.value);
-      await savePropertiesToGrid(mappedProperties, counters);
-
-      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error('Error fetching properties:', error.message);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-
-  if (allFetchedKeys.length) {
-    await deleteNonMatchingProperties(allFetchedKeys, counters);
-  }
-
-  console.log(`\n Grid sync complete. Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
-}
-
-// =====================
-// Main
+// Entry point
 // =====================
 (async function main() {
   try {
-    console.log('Starting incremental grid sync...');
-    await fetchAndProcessDDFProperties();
-    console.log('Sync complete. Exiting process.');
+    console.log('Starting grid sync from property table...');
+    await syncGridFromProperty();
     process.exit(0);
   } catch (error) {
     console.error('Fatal error:', error.message);
