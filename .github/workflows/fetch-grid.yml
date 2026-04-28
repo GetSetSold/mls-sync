@@ -2,8 +2,7 @@ name: DDF Grid Sync
 
 on:
   schedule:
-    # 9:00 AM ET and 9:30 AM ET (convert to UTC)
-    - cron: '30 13 * * *'   # 9:30 AM ET → 13:30 UTC
+    - cron: '30 */4 * * *'  # every 4 hours at :30
   workflow_dispatch:
 
 jobs:
