@@ -373,9 +373,9 @@ async function main() {
     let ddfUrl;
     if (lastSync && !isFullSync) {
       const filterTime = new Date(new Date(lastSync).getTime() - 60000).toISOString();
-      ddfUrl = `${PROPERTY_URL}?$top=500&$filter=ModificationTimestamp gt '${filterTime}'&$orderby=ModificationTimestamp`;
+      ddfUrl = `${PROPERTY_URL}?$top=100&$filter=ModificationTimestamp gt '${filterTime}'&$orderby=ModificationTimestamp`;
     } else {
-      ddfUrl = `${PROPERTY_URL}?$top=500&$orderby=ModificationTimestamp`;
+      ddfUrl = `${PROPERTY_URL}?$top=100&$orderby=ModificationTimestamp`;
     }
 
     console.log(`\nStarting ${isFullSync ? 'FULL' : 'incremental'} DDF sync...\n`);
