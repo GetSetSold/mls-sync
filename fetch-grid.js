@@ -14,14 +14,35 @@ const CLIENT_ID = process.env.DDF_CLIENT_ID || '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = process.env.DDF_CLIENT_SECRET || '***PURGED-DDF-CLIENT-SECRET***';
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 
-const BATCH_SIZE = 500;     // ✅ up from 100 — fewer DB round trips
-const BATCH_DELAY_MS = 300; // ✅ pause between batches to reduce Disk IO spikes
+const BATCH_SIZE = 500;
+
+// =====================
+// Detect sync mode
+// Matches fetch-property.js — full at 2am UTC, delta all other runs
+// =====================
+function getSyncMode() {
+  const utcHour = new Date().getUTCHours();
+  const isFullSync = utcHour === 2;
+  return isFullSync ? 'full' : 'delta';
+}
+
+function buildStartUrl(mode) {
+  if (mode === 'full') {
+    console.log('🔄 MODE: Full sync — fetching all listings (deletions will be checked)');
+    return `${PROPERTY_URL}?$top=100`;
+  }
+
+  // Delta: 4.5 hour lookback — 30 min overlap to never miss records
+  const since = new Date(Date.now() - 4.5 * 60 * 60 * 1000).toISOString();
+  console.log(`⚡ MODE: Delta sync — fetching records modified since ${since}`);
+  return `${PROPERTY_URL}?$filter=ModificationTimestamp gt ${since}&$top=100`;
+}
 
 // =====================
 // Live progress
 // =====================
 function showProgress(counters) {
-  process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
+  process.stdout.write(`\rFetched: ${counters.fetched} | Saved: ${counters.saved} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
@@ -44,7 +65,7 @@ async function getAccessToken() {
 }
 
 // =====================
-// Map properties for grid — unchanged from original working version
+// Map properties for grid
 // =====================
 function mapPropertiesForGrid(properties) {
   return properties.map(p => {
@@ -85,48 +106,35 @@ function mapPropertiesForGrid(properties) {
 }
 
 // =====================
-// Save to grid — same working upsert pattern, larger batch + delay
+// Save to grid
+// No pre-check SELECT — upsert handles insert vs update internally
 // =====================
 async function savePropertiesToGrid(properties, counters) {
   for (let i = 0; i < properties.length; i += BATCH_SIZE) {
     const batch = properties.slice(i, i + BATCH_SIZE);
-
-    const keys = batch.map(p => p.ListingKey);
-    const { data: existingData } = await supabase
-      .from('grid')
-      .select('ListingKey')
-      .in('ListingKey', keys);
-
-    const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
-    batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
     const { error } = await supabase
       .from('grid')
       .upsert(batch, { onConflict: ['ListingKey'] });
 
     if (error) console.error('\nError saving batch:', error.message);
+    else counters.saved += batch.length;
 
     showProgress(counters);
-
-    // ✅ Pause between batches to spread Disk IO
-    if (i + BATCH_SIZE < properties.length) {
-      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
-    }
   }
 }
 
 // =====================
-// Delete non-matching listings
-// ✅ Paginated fetch — fixes timeout from single SELECT on 56K rows
-// ✅ Safety guard only blocks on zero keys, not arbitrary threshold
+// Delete expired listings — only runs on full sync
+// Paginated to avoid statement timeout
 // =====================
 async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   if (allFetchedKeys.length === 0) {
-    console.log('\n⚠️ No keys collected from DDF — skipping deletion');
+    console.log('\n⚠️ No keys from DDF — skipping deletion');
     return;
   }
 
-  console.log(`\nChecking for deleted listings (${allFetchedKeys.length} DDF keys collected)...`);
+  console.log(`\nChecking for expired grid listings (${allFetchedKeys.length} DDF keys)...`);
 
   const latestSet = new Set(allFetchedKeys);
   const toDelete = [];
@@ -134,7 +142,6 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   let from = 0;
   let hasMore = true;
 
-  // ✅ Paginate through grid keys — avoids timeout from one large SELECT
   while (hasMore) {
     const { data, error } = await supabase
       .from('grid')
@@ -142,14 +149,11 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      console.error('\n⚠️ Error scanning grid — skipping deletion to be safe:', error.message);
+      console.error('\n⚠️ Error scanning grid — skipping deletion:', error.message);
       return;
     }
 
-    if (!data || data.length === 0) {
-      hasMore = false;
-      break;
-    }
+    if (!data || data.length === 0) { hasMore = false; break; }
 
     data.forEach(r => {
       if (!latestSet.has(r.ListingKey)) toDelete.push(r.ListingKey);
@@ -157,11 +161,11 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
 
     from += pageSize;
     hasMore = data.length === pageSize;
-    process.stdout.write(`\rScanning grid... ${from} checked`);
+    process.stdout.write(`\rScanning grid for deletions... ${from} checked`);
   }
 
   if (toDelete.length === 0) {
-    console.log('\nNo listings to delete from grid.');
+    console.log('\nNo expired listings in grid.');
     return;
   }
 
@@ -188,48 +192,59 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   }
 
   counters.deleted = deletedCount;
-  console.log(`\n✅ Deleted ${deletedCount} expired listings`);
+  console.log(`\n✅ Deleted ${deletedCount} expired grid listings`);
   showProgress(counters);
 }
 
 // =====================
-// Fetch from DDF and sync to grid — same pattern as original working file
+// Main fetch and sync
 // =====================
 async function fetchAndProcessDDFProperties() {
-  const counters = { added: 0, updated: 0, deleted: 0 };
+  const counters = { fetched: 0, saved: 0, deleted: 0 };
+  const mode = getSyncMode();
   const token = await getAccessToken();
-  let nextLink = `${PROPERTY_URL}?$top=100`;
+
+  let nextLink = buildStartUrl(mode);
   const allFetchedKeys = [];
 
   while (nextLink) {
     try {
-      const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const data = await response.json();
 
-      if (!data.value) throw new Error('Missing value array in DDF response');
+      if (!data.value) {
+        console.error('❌ Unexpected DDF response:', JSON.stringify(data, null, 2));
+        throw new Error('Missing value array in DDF response');
+      }
 
-      const mappedProperties = mapPropertiesForGrid(data.value);
-      await savePropertiesToGrid(mappedProperties, counters);
+      const mapped = mapPropertiesForGrid(data.value);
 
-      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
+      counters.fetched += mapped.length;
+      allFetchedKeys.push(...mapped.map(p => p.ListingKey));
+
+      await savePropertiesToGrid(mapped, counters);
+
       nextLink = data['@odata.nextLink'] || null;
 
     } catch (error) {
-      console.error('\nError fetching properties:', error.message);
+      console.error('\nFetch error:', error.message);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 
-  if (allFetchedKeys.length > 0) {
+  // ✅ Only check deletions on full sync — delta won't have all keys
+  if (mode === 'full' && allFetchedKeys.length > 0) {
     await deleteNonMatchingProperties(allFetchedKeys, counters);
   }
 
   console.log('\n✅ Grid sync complete');
-  console.log(`Final counts → Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
+  console.log(`Mode: ${mode.toUpperCase()} | Fetched: ${counters.fetched} | Saved: ${counters.saved} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
-// Main
+// Entry point
 // =====================
 (async function main() {
   try {
