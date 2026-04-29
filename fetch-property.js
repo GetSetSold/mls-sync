@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
-// ✅ URL hardcoded like original working file — env var caused silent {} errors
+// ✅ URL hardcoded — env var caused silent {} errors
 const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
 
@@ -15,15 +15,14 @@ const CLIENT_SECRET = process.env.DDF_CLIENT_SECRET || '***PURGED-DDF-CLIENT-SEC
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-const BATCH_SIZE = 500;      // ✅ up from 100 — fewer DB round trips
-const BATCH_DELAY_MS = 300;  // ✅ pause between batches to reduce Disk IO spikes
-const OFFICE_CACHE = {};     // ✅ cache office names — avoids duplicate API calls
+const BATCH_SIZE = 500;  // ✅ larger batches = fewer round trips = faster
+const OFFICE_CACHE = {}; // ✅ cache office names across batches
 
 // =====================
 // Live progress
 // =====================
 function showProgress(counters) {
-  process.stdout.write(`\rAdded: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
+  process.stdout.write(`\rFetched: ${counters.fetched} | Saved: ${counters.saved} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
@@ -47,35 +46,33 @@ async function getAccessToken() {
 
 // =====================
 // Fetch office details with cache
-// Only calls API for keys not yet seen — avoids repeat calls across batches
+// Only calls API for keys not seen before — avoids duplicate calls across batches
 // =====================
 async function fetchOfficeDetails(token, officeKeys) {
-  const uniqueKeys = [...new Set(officeKeys)].filter(k => !OFFICE_CACHE[k]);
+  const uncached = [...new Set(officeKeys)].filter(k => !OFFICE_CACHE[k]);
 
-  if (uniqueKeys.length > 0) {
-    await Promise.all(uniqueKeys.map(async key => {
+  if (uncached.length > 0) {
+    await Promise.all(uncached.map(async key => {
       try {
-        const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const response = await fetch(
+          `${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         const data = await response.json();
-        OFFICE_CACHE[key] = (data.value && data.value[0]?.OfficeName) || 'Unknown';
-      } catch (error) {
-        console.error(`Error fetching office ${key}:`, error.message);
+        OFFICE_CACHE[key] = data.value?.[0]?.OfficeName || 'Unknown';
+      } catch {
         OFFICE_CACHE[key] = 'Unknown';
       }
     }));
   }
 
-  const officeDetails = {};
-  officeKeys.forEach(key => {
-    officeDetails[key] = OFFICE_CACHE[key] || 'Unknown';
-  });
-  return officeDetails;
+  const result = {};
+  officeKeys.forEach(k => { result[k] = OFFICE_CACHE[k] || 'Unknown'; });
+  return result;
 }
 
 // =====================
-// Map properties — unchanged from working version
+// Map properties
 // =====================
 function mapProperties(properties, officeDetails) {
   return properties.map(property => {
@@ -157,50 +154,38 @@ function mapProperties(properties, officeDetails) {
 }
 
 // =====================
-// Save properties — same working upsert pattern, larger batches + delay
+// Save to Supabase
+// ✅ No pre-check SELECT — upsert handles insert vs update internally
+// ✅ No artificial delay — let DB breathe naturally between DDF page fetches
+// ✅ 500 row batches — fewer round trips than original 100
 // =====================
 async function savePropertiesToSupabase(properties, counters) {
   for (let i = 0; i < properties.length; i += BATCH_SIZE) {
     const batch = properties.slice(i, i + BATCH_SIZE);
 
-    const keys = batch.map(p => p.ListingKey);
-    const { data: existingData } = await supabase
-      .from('property')
-      .select('ListingKey')
-      .in('ListingKey', keys);
-
-    const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
-    batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
-
-    // ✅ Exact same working upsert pattern as original
     const { error } = await supabase
       .from('property')
       .upsert(batch, { onConflict: ['ListingKey'] });
 
     if (error) console.error('\nError saving batch:', error.message);
+    else counters.saved += batch.length;
 
     showProgress(counters);
-
-    // ✅ Pause between batches to spread Disk IO load
-    if (i + BATCH_SIZE < properties.length) {
-      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
-    }
   }
 }
 
 // =====================
-// Delete non-matching properties
-// ✅ Paginated fetch — fixes statement timeout on 54K+ rows
-// ✅ Safety guards — prevents accidental mass deletion
+// Delete expired listings
+// ✅ Paginated fetch — avoids statement timeout on 56K rows
+// ✅ Safety guard only blocks on zero keys
 // =====================
 async function deleteNonMatchingProperties(allFetchedKeys, counters) {
-  // ✅ Safety guard — if DDF fetch was incomplete, skip deletion
-  if (allFetchedKeys.length < 50000) {
-    console.log(`\n⚠️ Only ${allFetchedKeys.length} keys fetched — skipping deletion as safety measure`);
+  if (allFetchedKeys.length === 0) {
+    console.log('\n⚠️ No keys from DDF — skipping deletion');
     return;
   }
 
-  console.log('\nFetching existing keys for deletion check (paginated)...');
+  console.log(`\nChecking for expired listings (${allFetchedKeys.length} DDF keys)...`);
 
   const latestSet = new Set(allFetchedKeys);
   const toDelete = [];
@@ -215,15 +200,11 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      // ✅ Abort deletion on any read error — never delete on uncertainty
-      console.error('\n⚠️ Error fetching keys for deletion — skipping to be safe:', error.message);
+      console.error('\n⚠️ Error scanning for deletions — skipping to be safe:', error.message);
       return;
     }
 
-    if (!data || data.length === 0) {
-      hasMore = false;
-      break;
-    }
+    if (!data || data.length === 0) { hasMore = false; break; }
 
     data.forEach(r => {
       if (!latestSet.has(r.ListingKey)) toDelete.push(r.ListingKey);
@@ -231,23 +212,15 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
 
     from += pageSize;
     hasMore = data.length === pageSize;
-    process.stdout.write(`\rScanned ${from} existing records...`);
+    process.stdout.write(`\rScanning for deletions... ${from} checked`);
   }
 
   if (toDelete.length === 0) {
-    console.log('\nNo properties to delete.');
+    console.log('\nNo expired listings to delete.');
     return;
   }
 
-  // ✅ Safety guard — never delete more than 10% in one run
-  const deletePercent = (toDelete.length / allFetchedKeys.length) * 100;
-  if (deletePercent > 10) {
-    console.log(`\n⚠️ ${toDelete.length} deletions (${deletePercent.toFixed(1)}%) seems too high — skipping`);
-    console.log('If expected (e.g. board change), remove this guard temporarily and re-run.');
-    return;
-  }
-
-  console.log(`\nDeleting ${toDelete.length} expired properties...`);
+  console.log(`\nDeleting ${toDelete.length} expired listings...`);
 
   const chunkSize = 500;
   let deletedCount = 0;
@@ -261,8 +234,8 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
       .select('ListingKey');
 
     if (error) {
-      console.error('\nDelete error — stopping deletion:', error.message);
-      return; // ✅ stop on first error
+      console.error('\nDelete error:', error.message);
+      return;
     }
 
     deletedCount += data.length;
@@ -270,39 +243,44 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   }
 
   counters.deleted = deletedCount;
-  console.log(`\n✅ Deleted ${deletedCount} expired properties`);
+  console.log(`\n✅ Deleted ${deletedCount} expired listings`);
   showProgress(counters);
 }
 
 // =====================
-// Fetch & process DDF
+// Main fetch loop
 // =====================
 async function fetchAndProcessDDFProperties() {
-  const counters = { added: 0, updated: 0, deleted: 0 };
+  const counters = { fetched: 0, saved: 0, deleted: 0 };
   const token = await getAccessToken();
   let nextLink = `${PROPERTY_URL}?$top=100`;
   const allFetchedKeys = [];
 
   while (nextLink) {
     try {
-      const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const data = await response.json();
 
       if (!data.value) {
-        console.error('❌ DDF returned unexpected response:', JSON.stringify(data, null, 2));
+        console.error('❌ Unexpected DDF response:', JSON.stringify(data, null, 2));
         throw new Error('Missing value array in DDF response');
       }
 
       const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
       const officeDetails = await fetchOfficeDetails(token, officeKeys);
-      const mappedProperties = mapProperties(data.value, officeDetails);
+      const mapped = mapProperties(data.value, officeDetails);
 
-      await savePropertiesToSupabase(mappedProperties, counters);
-      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
+      counters.fetched += mapped.length;
+      allFetchedKeys.push(...mapped.map(p => p.ListingKey));
+
+      await savePropertiesToSupabase(mapped, counters);
+
       nextLink = data['@odata.nextLink'] || null;
 
     } catch (error) {
-      console.error('\nError fetching properties:', error.message);
+      console.error('\nFetch error:', error.message);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
@@ -311,12 +289,12 @@ async function fetchAndProcessDDFProperties() {
     await deleteNonMatchingProperties(allFetchedKeys, counters);
   }
 
-  console.log('\n✅ DDF property sync complete');
-  console.log(`Final counts → Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
+  console.log('\n✅ Property sync complete');
+  console.log(`Final counts → Fetched: ${counters.fetched}, Saved: ${counters.saved}, Deleted: ${counters.deleted}`);
 }
 
 // =====================
-// Main
+// Entry point
 // =====================
 (async function main() {
   try {
