@@ -2,8 +2,8 @@ name: DDF Grid Sync
 
 on:
   schedule:
-  - cron: '0 14 * * *'  # 9 AM EST
-workflow_dispatch:
+    - cron: '0 14 * * *'  # 9 AM EST
+  workflow_dispatch:
 
 jobs:
   fetch-and-save:
