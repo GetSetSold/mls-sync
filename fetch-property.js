@@ -15,8 +15,31 @@ const CLIENT_SECRET = process.env.DDF_CLIENT_SECRET || '***PURGED-DDF-CLIENT-SEC
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-const BATCH_SIZE = 500;  // ✅ larger batches = fewer round trips = faster
-const OFFICE_CACHE = {}; // ✅ cache office names across batches
+const BATCH_SIZE = 500;
+const OFFICE_CACHE = {};
+
+// =====================
+// Detect sync mode
+// Full sync runs once daily at 2am UTC — fetches all 56K, handles deletions
+// Delta sync runs every other 4hr slot — only fetches changed records (~200-800)
+// =====================
+function getSyncMode() {
+  const utcHour = new Date().getUTCHours();
+  const isFullSync = utcHour === 2; // 2am UTC = ~10pm ET
+  return isFullSync ? 'full' : 'delta';
+}
+
+function buildStartUrl(mode) {
+  if (mode === 'full') {
+    console.log('🔄 MODE: Full sync — fetching all listings (deletions will be checked)');
+    return `${PROPERTY_URL}?$top=100`;
+  }
+
+  // Delta: go back 4.5 hours — 30 min overlap ensures no records are missed
+  const since = new Date(Date.now() - 4.5 * 60 * 60 * 1000).toISOString();
+  console.log(`⚡ MODE: Delta sync — fetching records modified since ${since}`);
+  return `${PROPERTY_URL}?$filter=ModificationTimestamp gt ${since}&$top=100`;
+}
 
 // =====================
 // Live progress
@@ -46,7 +69,6 @@ async function getAccessToken() {
 
 // =====================
 // Fetch office details with cache
-// Only calls API for keys not seen before — avoids duplicate calls across batches
 // =====================
 async function fetchOfficeDetails(token, officeKeys) {
   const uncached = [...new Set(officeKeys)].filter(k => !OFFICE_CACHE[k]);
@@ -155,9 +177,7 @@ function mapProperties(properties, officeDetails) {
 
 // =====================
 // Save to Supabase
-// ✅ No pre-check SELECT — upsert handles insert vs update internally
-// ✅ No artificial delay — let DB breathe naturally between DDF page fetches
-// ✅ 500 row batches — fewer round trips than original 100
+// No pre-check SELECT — upsert handles insert vs update internally
 // =====================
 async function savePropertiesToSupabase(properties, counters) {
   for (let i = 0; i < properties.length; i += BATCH_SIZE) {
@@ -175,9 +195,8 @@ async function savePropertiesToSupabase(properties, counters) {
 }
 
 // =====================
-// Delete expired listings
-// ✅ Paginated fetch — avoids statement timeout on 56K rows
-// ✅ Safety guard only blocks on zero keys
+// Delete expired listings — only runs on full sync
+// Paginated to avoid statement timeout on 56K rows
 // =====================
 async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   if (allFetchedKeys.length === 0) {
@@ -200,7 +219,7 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
       .range(from, from + pageSize - 1);
 
     if (error) {
-      console.error('\n⚠️ Error scanning for deletions — skipping to be safe:', error.message);
+      console.error('\n⚠️ Error scanning for deletions — skipping:', error.message);
       return;
     }
 
@@ -216,7 +235,7 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
   }
 
   if (toDelete.length === 0) {
-    console.log('\nNo expired listings to delete.');
+    console.log('\nNo expired listings found.');
     return;
   }
 
@@ -248,12 +267,14 @@ async function deleteNonMatchingProperties(allFetchedKeys, counters) {
 }
 
 // =====================
-// Main fetch loop
+// Main fetch and sync
 // =====================
 async function fetchAndProcessDDFProperties() {
   const counters = { fetched: 0, saved: 0, deleted: 0 };
+  const mode = getSyncMode();
   const token = await getAccessToken();
-  let nextLink = `${PROPERTY_URL}?$top=100`;
+
+  let nextLink = buildStartUrl(mode);
   const allFetchedKeys = [];
 
   while (nextLink) {
@@ -285,12 +306,13 @@ async function fetchAndProcessDDFProperties() {
     }
   }
 
-  if (allFetchedKeys.length > 0) {
+  // ✅ Only check deletions on full sync — delta won't have all keys
+  if (mode === 'full' && allFetchedKeys.length > 0) {
     await deleteNonMatchingProperties(allFetchedKeys, counters);
   }
 
   console.log('\n✅ Property sync complete');
-  console.log(`Final counts → Fetched: ${counters.fetched}, Saved: ${counters.saved}, Deleted: ${counters.deleted}`);
+  console.log(`Mode: ${mode.toUpperCase()} | Fetched: ${counters.fetched} | Saved: ${counters.saved} | Deleted: ${counters.deleted}`);
 }
 
 // =====================
