@@ -1,6 +1,7 @@
 name: DDF Grid Sync
 
-on schedule:
+on:
+  schedule:
   - cron: '0 14 * * *'  # 9 AM EST
 workflow_dispatch:
 
