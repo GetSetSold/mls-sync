@@ -1,6 +1,7 @@
 name: DDF Property Sync
 
-schedule:
+on:
+  schedule:
   - cron: '30 14 * * *'  # 9:30 AM EST
 workflow_dispatch:
 
