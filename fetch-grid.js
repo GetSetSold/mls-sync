@@ -24,12 +24,9 @@ function showProgress(counters) {
 // Reads from property table — no second DDF fetch needed
 // =====================
 function mapPropertyToGrid(p) {
-  let firstPhoto = null;
-  if (Array.isArray(p.Media)) {
-    const photo = p.Media.find(m => m.Order === 1);
-    firstPhoto = photo?.MediaURL || null;
-  }
-
+  // ✅ Media intentionally NOT selected from property table — it's heavy JSON
+  // that causes statement timeouts at scale. Photo URL is preserved in grid
+  // from the initial full sync and only changes when PhotosChangeTimestamp updates.
   let structureTypeText = null;
   if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
     structureTypeText = p.StructureType[0];
@@ -43,7 +40,7 @@ function mapPropertyToGrid(p) {
     OriginalEntryTimestamp: p.OriginalEntryTimestamp,
     ListPrice: p.ListPrice,
     PhotosCount: p.PhotosCount,
-    Media: firstPhoto,
+    // Media not updated here — preserved from grid's existing value
     UnparsedAddress: p.UnparsedAddress,
     City: p.City,
     UnitNumber: p.UnitNumber,
@@ -71,14 +68,32 @@ async function saveToGrid(batch, counters) {
     .in('ListingKey', keys);
 
   const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
-  batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
-  // ✅ Exact same working upsert pattern as original
-  const { error } = await supabase
-    .from('grid')
-    .upsert(batch, { onConflict: ['ListingKey'] });
+  // Split into new vs existing
+  const toInsert = batch.filter(p => !existingKeys.has(p.ListingKey));
+  const toUpdate = batch.filter(p => existingKeys.has(p.ListingKey));
 
-  if (error) console.error('\nError saving grid batch:', error.message);
+  counters.added += toInsert.length;
+  counters.updated += toUpdate.length;
+
+  // ✅ New rows — insert with Media as null (will be populated by fetch-property media sync)
+  if (toInsert.length > 0) {
+    const { error } = await supabase
+      .from('grid')
+      .insert(toInsert.map(p => ({ ...p, Media: null })));
+    if (error) console.error('\nError inserting new grid rows:', error.message);
+  }
+
+  // ✅ Existing rows — update but exclude Media so photo URLs are preserved
+  if (toUpdate.length > 0) {
+    const { error } = await supabase
+      .from('grid')
+      .upsert(toUpdate, {
+        onConflict: ['ListingKey'],
+        ignoreDuplicates: false,
+      });
+    if (error) console.error('\nError updating grid rows:', error.message);
+  }
 }
 
 // =====================
@@ -171,7 +186,75 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
 }
 
 // =====================
-// Main sync — reads from property table, writes to grid
+// Sync Media URLs only for rows that need it
+// Reads Media from property only for new listings or photo count changes
+// Avoids selecting Media for all 56K rows which causes timeout
+// =====================
+async function syncMediaForGrid() {
+  console.log('\nSyncing Media URLs for new/changed listings...');
+
+  let updated = 0;
+  const pageSize = 200;
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    // Find grid rows where Media is null (new listings)
+    const { data: nullMediaRows, error: e1 } = await supabase
+      .from('grid')
+      .select('ListingKey')
+      .is('Media', null)
+      .range(from, from + pageSize - 1);
+
+    if (e1) {
+      console.error('\nError fetching null media rows:', e1.message);
+      break;
+    }
+
+    if (!nullMediaRows || nullMediaRows.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    const keys = nullMediaRows.map(r => r.ListingKey);
+
+    // Fetch Media from property table for just these keys
+    const { data: propRows, error: e2 } = await supabase
+      .from('property')
+      .select('ListingKey, Media')
+      .in('ListingKey', keys);
+
+    if (e2) {
+      console.error('\nError fetching media from property:', e2.message);
+      break;
+    }
+
+    // Update grid with first photo URL
+    for (const row of propRows || []) {
+      let firstPhoto = null;
+      if (Array.isArray(row.Media)) {
+        const photo = row.Media.find(m => m.Order === 1);
+        firstPhoto = photo?.MediaURL || null;
+      }
+
+      if (firstPhoto) {
+        await supabase
+          .from('grid')
+          .update({ Media: firstPhoto })
+          .eq('ListingKey', row.ListingKey);
+        updated++;
+      }
+    }
+
+    from += pageSize;
+    hasMore = nullMediaRows.length === pageSize;
+    process.stdout.write(`\rMedia synced: ${updated}`);
+  }
+
+  console.log(`\n✅ Media sync complete — updated ${updated} listings`);
+}
+
+// =====================
 // No DDF fetch — avoids doubling API calls and IO
 // =====================
 async function syncGridFromProperty() {
@@ -189,7 +272,7 @@ async function syncGridFromProperty() {
       .from('property')
       .select(`
         ListingKey, TotalActualRent, OriginalEntryTimestamp,
-        ListPrice, PhotosCount, Media,
+        ListPrice, PhotosCount,
         UnparsedAddress, City, UnitNumber, Province, PostalCode,
         Latitude, Longitude, ParkingTotal, BathroomsTotalInteger,
         BedroomsTotal, AboveGradeFinishedArea, StructureType
@@ -241,6 +324,7 @@ async function syncGridFromProperty() {
   }
 
   await deleteRemovedFromGrid(allPropertyKeys, counters);
+  await syncMediaForGrid();
 
   console.log('\n\n✅ Grid sync complete');
   console.log(`Final counts → Processed: ${counters.processed} | Added: ${counters.added} | Updated: ${counters.updated} | Deleted: ${counters.deleted}`);
