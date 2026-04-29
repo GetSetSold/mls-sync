@@ -1,6 +1,7 @@
-// sync-ddf.js — Combined incremental DDF sync for both property & grid
+// ddf-sync.js — Combined incremental DDF sync with dead-row prevention
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
+import crypto from 'crypto';
 
 const supabaseUrl = 'https://nkjxlwuextxzpeohutxz.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY;
@@ -15,7 +16,6 @@ const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
-// Sync state table — tracks last successful sync timestamp
 const SYNC_STATE_TABLE = 'sync_state';
 
 // =====================
@@ -23,10 +23,16 @@ const SYNC_STATE_TABLE = 'sync_state';
 // =====================
 function showProgress(counters) {
   process.stdout.write(
-    `\r  Property: +${counters.property.added} ~${counters.property.updated} | ` +
-    `Grid: +${counters.grid.added} ~${counters.grid.updated} | ` +
-    `Deleted: ${counters.deleted}`
+    `\r  Prop: +${counters.property.added} ~${counters.property.unchanged} Δ${counters.property.updated} | ` +
+    `Grid: Δ${counters.grid.updated} skip:${counters.grid.unchanged} | ` +
+    `Del: ${counters.deleted}`
   );
+}
+
+// Hash only the data columns (not _data_hash itself)
+function computeHash(row) {
+  const { _data_hash, ...rest } = row;
+  return crypto.createHash('md5').update(JSON.stringify(rest)).digest('hex');
 }
 
 // =====================
@@ -49,7 +55,7 @@ async function getAccessToken() {
 }
 
 // =====================
-// Get last sync timestamp
+// Sync state management
 // =====================
 async function getLastSyncTime() {
   const { data, error } = await supabase
@@ -59,35 +65,31 @@ async function getLastSyncTime() {
     .single();
 
   if (error || !data?.last_sync) {
-    console.log('No previous sync found — running full sync this time.');
-    return null; // null = full sync
+    console.log('No previous sync found — running full sync.');
+    return null;
   }
-  console.log(`Last sync: ${data.last_sync} — running incremental sync.`);
+  console.log(`Last sync: ${data.last_sync} — incremental.`);
   return data.last_sync;
 }
 
-// =====================
-// Save last sync timestamp
-// =====================
 async function saveLastSyncTime() {
   const now = new Date().toISOString();
   await supabase
     .from(SYNC_STATE_TABLE)
     .upsert({ id: 1, last_sync: now }, { onConflict: ['id'] });
-  console.log(`\nSync state saved: ${now}`);
+  console.log(`Sync timestamp saved: ${now}`);
 }
 
 // =====================
-// Fetch office details (batched — one call per unique office)
+// Fetch office details (batched)
 // =====================
 async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)].filter(Boolean);
   if (uniqueKeys.length === 0) return {};
 
   const officeDetails = {};
-
-  // DDF supports $filter with 'or' — batch offices to reduce API calls
   const batchSize = 20;
+
   for (let i = 0; i < uniqueKeys.length; i += batchSize) {
     const chunk = uniqueKeys.slice(i, i + batchSize);
     const filter = chunk.map(k => `OfficeKey eq '${k.trim()}'`).join(' or ');
@@ -110,7 +112,7 @@ async function fetchOfficeDetails(token, officeKeys) {
 }
 
 // =====================
-// Map for property table (full data)
+// Map for property table
 // =====================
 function mapForProperty(properties, officeDetails) {
   return properties.map(property => {
@@ -192,7 +194,7 @@ function mapForProperty(properties, officeDetails) {
 }
 
 // =====================
-// Map for grid table (lightweight — first photo only)
+// Map for grid table (lightweight)
 // =====================
 function mapForGrid(properties) {
   return properties.map(p => {
@@ -233,54 +235,78 @@ function mapForGrid(properties) {
 }
 
 // =====================
-// Upsert batch — no existence check, just direct upsert
+// Smart upsert — only writes rows that actually changed
 // =====================
-async function upsertBatch(table, batch) {
-  const { error } = await supabase.from(table).upsert(batch, { onConflict: ['ListingKey'] });
-  if (error) {
-    console.error(`\nError upserting to ${table}:`, error.message);
-    return false;
+async function smartUpsert(table, rows, counters) {
+  if (rows.length === 0) return;
+
+  // 1. Compute hashes for incoming data
+  const incoming = rows.map(row => ({
+    ...row,
+    _data_hash: computeHash(row),
+  }));
+
+  const keys = incoming.map(r => r.ListingKey);
+
+  // 2. Fetch existing hashes from DB
+  const { data: existing, error: fetchErr } = await supabase
+    .from(table)
+    .select('ListingKey, _data_hash')
+    .in('ListingKey', keys);
+
+  if (fetchErr) {
+    console.error(`\nError fetching hashes for ${table}:`, fetchErr.message);
+    // Fallback: upsert all
+    const { error } = await supabase.from(table).upsert(incoming, { onConflict: ['ListingKey'] });
+    if (error) console.error(`Fallback upsert error (${table}):`, error.message);
+    counters[table].updated += incoming.length;
+    return;
   }
-  return true;
-}
 
-// =====================
-// Process a page of DDF results
-// =====================
-async function processPage(properties, token, counters) {
-  if (properties.length === 0) return;
+  // 3. Build lookup of existing hashes
+  const existingMap = new Map(
+    (existing || []).map(r => [r.ListingKey, r._data_hash])
+  );
 
-  // Office details (only for property table)
-  const officeKeys = properties.map(p => p.ListOfficeKey).filter(Boolean);
-  const officeDetails = await fetchOfficeDetails(token, officeKeys);
+  // 4. Split into: new inserts vs changed updates vs unchanged skips
+  const toWrite = [];
 
-  // Map for both tables
-  const propertyRows = mapForProperty(properties, officeDetails);
-  const gridRows = mapForGrid(properties);
+  for (const row of incoming) {
+    const existingHash = existingMap.get(row.ListingKey);
+    if (!existingHash) {
+      // Brand new listing
+      counters[table].added++;
+      toWrite.push(row);
+    } else if (existingHash !== row._data_hash) {
+      // Data actually changed — worth writing
+      counters[table].updated++;
+      toWrite.push(row);
+    } else {
+      // Identical — SKIP to avoid dead rows
+      counters[table].unchanged++;
+    }
+  }
 
-  // Upsert in larger batches (500 instead of 100)
+  // 5. Only upsert rows that need it
+  if (toWrite.length === 0) {
+    console.log(`  ${table}: all ${incoming.length} unchanged, skipping.`);
+    return;
+  }
+
+  // Batch the writes (500 at a time)
   const batchSize = 500;
-
-  for (let i = 0; i < propertyRows.length; i += batchSize) {
-    const propBatch = propertyRows.slice(i, i + batchSize);
-    const gridBatch = gridRows.slice(i, i + batchSize);
-
-    // Count new vs updated (by checking ModificationTimestamp against sync_state)
-    // New property = no existing record — we'll count after first full sync
-    // For simplicity: approximate — all inserts in incremental sync are updates
-    const propCount = propBatch.length;
-    counters.property.updated += propCount;
-
-    await upsertBatch('property', propBatch);
-    counters.grid.updated += Math.min(gridBatch.length, propCount);
-    await upsertBatch('grid', gridBatch);
-
+  for (let i = 0; i < toWrite.length; i += batchSize) {
+    const batch = toWrite.slice(i, i + batchSize);
+    const { error } = await supabase.from(table).upsert(batch, { onConflict: ['ListingKey'] });
+    if (error) console.error(`\nUpsert error (${table}):`, error.message);
     showProgress(counters);
   }
+
+  console.log(`  ${table}: ${counters[table].added} new, ${counters[table].updated} changed, ${counters[table].unchanged} skipped.`);
 }
 
 // =====================
-// Full deletion check (only run during daily full sync at 9 AM)
+// Full deletion check (daily only)
 // =====================
 async function runFullDeletionCheck(allFetchedKeys, counters) {
   console.log('\n  Running full deletion check...');
@@ -305,6 +331,8 @@ async function runFullDeletionCheck(allFetchedKeys, counters) {
         continue;
       }
 
+      console.log(`  ${table}: deleting ${toDelete.length} removed listings...`);
+
       const chunkSize = 500;
       let deleted = 0;
       for (let i = 0; i < toDelete.length; i += chunkSize) {
@@ -319,7 +347,7 @@ async function runFullDeletionCheck(allFetchedKeys, counters) {
         else deleted += data?.length || 0;
       }
       counters.deleted += deleted;
-      console.log(`  ${table}: deleted ${deleted} removed listings.`);
+      console.log(`  ${table}: deleted ${deleted}.`);
     } catch (err) {
       console.error(`Fatal ${table} deletion error:`, err.message);
     }
@@ -327,31 +355,30 @@ async function runFullDeletionCheck(allFetchedKeys, counters) {
 }
 
 // =====================
-// Main sync
+// Main
 // =====================
 async function main() {
   try {
-    const counters = { property: { added: 0, updated: 0 }, grid: { added: 0, updated: 0 }, deleted: 0 };
+    const counters = {
+      property: { added: 0, updated: 0, unchanged: 0 },
+      grid: { added: 0, updated: 0, unchanged: 0 },
+      deleted: 0,
+    };
+
     const isFullSync = process.env.FULL_SYNC === 'true';
     const token = await getAccessToken();
-
-    // Get last sync time for incremental filter
     const lastSync = await getLastSyncTime();
 
-    // Build DDF URL — use ModificationTimestamp filter for incremental sync
+    // Build DDF URL
     let ddfUrl;
     if (lastSync && !isFullSync) {
-      // Incremental: only fetch properties modified since last sync
-      // Add 1-minute buffer to avoid edge cases
       const filterTime = new Date(new Date(lastSync).getTime() - 60000).toISOString();
       ddfUrl = `${PROPERTY_URL}?$top=500&$filter=ModificationTimestamp gt '${filterTime}'&$orderby=ModificationTimestamp`;
     } else {
-      // Full sync: fetch everything
       ddfUrl = `${PROPERTY_URL}?$top=500&$orderby=ModificationTimestamp`;
     }
 
-    console.log(`\nStarting ${isFullSync ? 'FULL' : 'incremental'} DDF sync...`);
-    console.log(`URL: ${ddfUrl}\n`);
+    console.log(`\nStarting ${isFullSync ? 'FULL' : 'incremental'} DDF sync...\n`);
 
     let nextLink = ddfUrl;
     const allFetchedKeys = [];
@@ -360,7 +387,7 @@ async function main() {
     while (nextLink) {
       try {
         pageCount++;
-        console.log(`  Page ${pageCount}: ${nextLink.substring(0, 120)}...`);
+        console.log(`  Page ${pageCount}...`);
 
         const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
         const data = await response.json();
@@ -370,9 +397,21 @@ async function main() {
           break;
         }
 
-        await processPage(data.value, token, counters);
-        allFetchedKeys.push(...data.value.map(p => p.ListingKey));
+        if (data.value.length > 0) {
+          // Fetch offices for this page
+          const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+          const officeDetails = await fetchOfficeDetails(token, officeKeys);
 
+          // Map for both tables
+          const propertyRows = mapForProperty(data.value, officeDetails);
+          const gridRows = mapForGrid(data.value);
+
+          // Smart upsert — only writes changed data
+          await smartUpsert('property', propertyRows, counters);
+          await smartUpsert('grid', gridRows, counters);
+        }
+
+        allFetchedKeys.push(...data.value.map(p => p.ListingKey));
         nextLink = data['@odata.nextLink'] || null;
       } catch (error) {
         console.error(`\nError on page ${pageCount}:`, error.message);
@@ -386,15 +425,15 @@ async function main() {
       await runFullDeletionCheck(allFetchedKeys, counters);
     }
 
-    // Save sync timestamp (always — so incremental works next time)
+    // Save sync timestamp
     await saveLastSyncTime();
 
-    // Final summary
+    // Summary
     console.log('\n✅ Sync complete!');
-    console.log(`  Property: ${counters.property.updated} upserted`);
-    console.log(`  Grid: ${counters.grid.updated} upserted`);
+    console.log(`  Property: ${counters.property.added} new, ${counters.property.updated} changed, ${counters.property.unchanged} unchanged (skipped)`);
+    console.log(`  Grid: ${counters.grid.added} new, ${counters.grid.updated} changed, ${counters.grid.unchanged} unchanged (skipped)`);
     console.log(`  Deleted: ${counters.deleted}`);
-    console.log(`  Total pages fetched: ${pageCount}`);
+    console.log(`  Pages fetched: ${pageCount}`);
 
     process.exit(0);
   } catch (error) {
