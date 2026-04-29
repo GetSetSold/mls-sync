@@ -10,6 +10,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const BATCH_SIZE = 500;      // ✅ up from 100 — fewer DB round trips
 const BATCH_DELAY_MS = 300;  // ✅ pause between batches to reduce Disk IO spikes
+const PAGE_SIZE = 200;       // ✅ small pages — Media JSON is large, 1000 rows times out
 
 // =====================
 // Live progress
@@ -86,9 +87,9 @@ async function saveToGrid(batch, counters) {
 // ✅ Safety guards — prevents accidental mass deletion
 // =====================
 async function deleteRemovedFromGrid(allPropertyKeys, counters) {
-  // ✅ Safety guard — if property read was incomplete, skip deletion
-  if (allPropertyKeys.length < 50000) {
-    console.log(`\n⚠️ Only ${allPropertyKeys.length} property keys read — skipping deletion as safety measure`);
+  // ✅ Safety guard — if nothing was read at all, skip deletion
+  if (allPropertyKeys.length === 0) {
+    console.log('\n⚠️ No property keys collected — skipping deletion');
     return;
   }
 
@@ -132,10 +133,14 @@ async function deleteRemovedFromGrid(allPropertyKeys, counters) {
   }
 
   // ✅ Safety guard — never delete more than 10% in one run
+  // Exception: if grid has fewer rows than property (recovery after wipe), allow full deletion
   const deletePercent = (toDelete.length / allPropertyKeys.length) * 100;
-  if (deletePercent > 10) {
+  const gridTotal = from; // from = total rows scanned in grid
+  const gridIsSparse = gridTotal < allPropertyKeys.length * 0.5;
+
+  if (deletePercent > 10 && !gridIsSparse) {
     console.log(`\n⚠️ ${toDelete.length} deletions (${deletePercent.toFixed(1)}%) seems too high — skipping`);
-    console.log('If expected (e.g. after grid was wiped), remove this guard temporarily and re-run.');
+    console.log('If expected (e.g. board change), remove this guard temporarily and re-run.');
     return;
   }
 
@@ -175,9 +180,9 @@ async function syncGridFromProperty() {
 
   console.log('Reading from property table...');
 
-  const pageSize = 1000;
   let from = 0;
   let hasMore = true;
+  let consecutiveErrors = 0;
 
   while (hasMore) {
     const { data: rows, error } = await supabase
@@ -189,12 +194,24 @@ async function syncGridFromProperty() {
         Latitude, Longitude, ParkingTotal, BathroomsTotalInteger,
         BedroomsTotal, AboveGradeFinishedArea, StructureType
       `)
-      .range(from, from + pageSize - 1);
+      .range(from, from + PAGE_SIZE - 1);
 
     if (error) {
-      console.error('\nError reading property table:', error.message);
-      break;
+      consecutiveErrors++;
+      console.error(`\nError reading property table at offset ${from}:`, error.message);
+
+      if (consecutiveErrors >= 3) {
+        console.error('3 consecutive errors — stopping read');
+        break;
+      }
+
+      // ✅ Wait and retry same page on timeout
+      console.log('Retrying in 3 seconds...');
+      await new Promise(r => setTimeout(r, 3000));
+      continue; // retry same offset
     }
+
+    consecutiveErrors = 0; // reset on success
 
     if (!rows || rows.length === 0) {
       hasMore = false;
@@ -216,8 +233,11 @@ async function syncGridFromProperty() {
     }
 
     showProgress(counters);
-    from += pageSize;
-    hasMore = rows.length === pageSize;
+    from += PAGE_SIZE;
+    hasMore = rows.length === PAGE_SIZE;
+
+    // ✅ Small pause between pages to avoid hammering DB
+    await new Promise(r => setTimeout(r, 100));
   }
 
   await deleteRemovedFromGrid(allPropertyKeys, counters);
