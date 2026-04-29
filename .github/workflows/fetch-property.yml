@@ -1,9 +1,8 @@
 name: DDF Property Sync
 
-on:
-  schedule:
-    - cron: '30 */4 * * *'  # every 4 hours at :30
-  workflow_dispatch:
+schedule:
+  - cron: '30 14 * * *'  # 9:30 AM EST
+workflow_dispatch:
 
 jobs:
   fetch-and-save:
