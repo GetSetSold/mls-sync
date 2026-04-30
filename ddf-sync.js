@@ -81,32 +81,26 @@ async function saveLastSyncTime() {
 }
 
 // =====================
-// Fetch office details (batched)
+// Fetch office details (individual — DDF doesn't support batch or filters)
 // =====================
 async function fetchOfficeDetails(token, officeKeys) {
   const uniqueKeys = [...new Set(officeKeys)].filter(Boolean);
   if (uniqueKeys.length === 0) return {};
 
   const officeDetails = {};
-  const batchSize = 20;
 
-  for (let i = 0; i < uniqueKeys.length; i += batchSize) {
-    const chunk = uniqueKeys.slice(i, i + batchSize);
-    const filter = chunk.map(k => `OfficeKey eq '${k.trim()}'`).join(' or ');
-
+  await Promise.all(uniqueKeys.map(async key => {
     try {
-      const response = await fetch(`${OFFICE_URL}?$filter=${encodeURIComponent(filter)}`, {
+      const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
-      if (data.value) {
-        data.value.forEach(o => { officeDetails[o.OfficeKey] = o.OfficeName || 'Unknown'; });
-      }
+      officeDetails[key] = (data.value && data.value[0]?.OfficeName) || 'Unknown';
     } catch (error) {
-      console.error(`Error fetching office batch at ${i}:`, error.message);
-      chunk.forEach(k => { officeDetails[k] = 'Unknown'; });
+      console.error(`Error fetching office ${key}:`, error.message);
+      officeDetails[key] = 'Unknown';
     }
-  }
+  }));
 
   return officeDetails;
 }
