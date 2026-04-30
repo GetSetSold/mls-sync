@@ -4,12 +4,20 @@ on:
   schedule:
     - cron: '0 14 * * *'  # 9 AM EST / 10 AM EDT
   workflow_dispatch:
+  workflow_run:
+    workflows: ['DDF Incremental Sync']
+    types: [completed]
+    branches: [main]
+    # Only trigger at certain hours to avoid runaway chains
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     environment: production
-
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
