@@ -20,7 +20,7 @@ const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 const SYNC_STATE_TABLE = 'sync_state';
 
 // For full sync: fetch all 56k listings per page (max allowed by CREA DDF)
-const DDF_PAGE_SIZE = 500;
+const DDF_PAGE_SIZE = 100; // CREA DDF hard cap
 // Hash-check SELECT batch size when NOT using pre-loaded map (incremental fallback)
 const HASH_FETCH_BATCH = 1000;
 // Upsert write batch size
