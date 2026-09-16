@@ -1,4 +1,10 @@
 // grid-sync.js
+//
+// NOTE: this script's job (syncing `grid`) is now fully covered by ddf-sync.js, which
+// also writes ListOfficeKey/OfficeName and skips unchanged rows via hashing. If both
+// this script and ddf-sync.js are scheduled, they are racing to write the same table —
+// recommend retiring this one (remove its workflow's `schedule:` trigger, or delete the
+// file) rather than running both. Kept fixed here only as a manual-only fallback.
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 
@@ -14,6 +20,8 @@ const TOKEN_URL = 'https://identity.crea.ca/connect/token';
 const CLIENT_ID = '***PURGED-DDF-CLIENT-ID***';
 const CLIENT_SECRET = '***PURGED-DDF-CLIENT-SECRET***';
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
+
+const MAX_RETRIES_PER_PAGE = 5;
 
 // =====================
 // Live progress
@@ -64,6 +72,7 @@ function mapPropertiesForGrid(properties) {
 
     return {
       ListingKey: p.ListingKey,
+      ListOfficeKey: p.ListOfficeKey || null,
       TotalActualRent: p.TotalActualRent,
       OriginalEntryTimestamp: p.OriginalEntryTimestamp,
       ListPrice: p.ListPrice,
@@ -106,10 +115,14 @@ async function savePropertiesToGrid(properties, counters) {
       .in('ListingKey', keys);
 
     const existingKeys = new Set(existingData?.map(p => p.ListingKey) || []);
-    batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
 
     const { error } = await supabase.from('grid').upsert(batch, { onConflict: ['ListingKey'] });
-    if (error) console.error('Error saving batch:', error.message);
+    if (error) {
+      console.error('Error saving batch:', error.message);
+    } else {
+      // Only count rows toward added/updated once we know the write actually succeeded
+      batch.forEach(p => existingKeys.has(p.ListingKey) ? counters.updated++ : counters.added++);
+    }
 
     showProgress(counters);
   }
@@ -164,28 +177,53 @@ async function fetchAndProcessDDFProperties() {
   const token = await getAccessToken();
   let nextLink = `${PROPERTY_URL}?$top=100`;
   const allFetchedKeys = [];
+  let syncIncomplete = false;
 
   while (nextLink) {
-    try {
-      console.log(`\nFetching properties: ${nextLink}`);
-      const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await response.json();
+    let retries = 0;
+    let pageSucceeded = false;
 
-      if (!data.value) throw new Error('Missing value array in DDF response');
+    while (!pageSucceeded) {
+      try {
+        console.log(`\nFetching properties: ${nextLink}`);
+        const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json();
 
-      const mappedProperties = mapPropertiesForGrid(data.value);
-      await savePropertiesToGrid(mappedProperties, counters);
+        if (!data.value) {
+          console.error('DDF returned unexpected response:', JSON.stringify(data));
+          syncIncomplete = true;
+          nextLink = null;
+          pageSucceeded = true;
+          break;
+        }
 
-      allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
-      nextLink = data['@odata.nextLink'] || null;
-    } catch (error) {
-      console.error('Error fetching properties:', error.message);
-      await new Promise(resolve => setTimeout(resolve, 5000));
+        const mappedProperties = mapPropertiesForGrid(data.value);
+        await savePropertiesToGrid(mappedProperties, counters);
+
+        allFetchedKeys.push(...mappedProperties.map(p => p.ListingKey));
+        nextLink = data['@odata.nextLink'] || null;
+        pageSucceeded = true;
+      } catch (error) {
+        retries++;
+        console.error(`Error fetching properties (attempt ${retries}/${MAX_RETRIES_PER_PAGE}):`, error.message);
+        if (retries >= MAX_RETRIES_PER_PAGE) {
+          console.error('  Giving up on this page — marking sync incomplete.');
+          syncIncomplete = true;
+          nextLink = null;
+          pageSucceeded = true;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
   }
 
-  if (allFetchedKeys.length) {
+  // Only delete if we actually got a clean, complete fetch — otherwise a transient
+  // failure partway through would wipe out listings we simply never reached.
+  if (allFetchedKeys.length && !syncIncomplete) {
     await deleteNonMatchingProperties(allFetchedKeys, counters);
+  } else if (syncIncomplete) {
+    console.warn('\n⚠️  Skipping deletion check — sync did not complete cleanly.');
   }
 
   console.log(`\n Grid sync complete. Added: ${counters.added}, Updated: ${counters.updated}, Deleted: ${counters.deleted}`);
