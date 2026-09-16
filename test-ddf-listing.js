@@ -53,11 +53,37 @@ async function tryFilter(token, field, value) {
   });
 }
 
+async function tryListingUrlContains(token, value) {
+  const url = `${PROPERTY_URL}?$filter=contains(ListingURL,'${value}')`;
+  console.log(`\nQuerying: contains(ListingURL, '${value}')`);
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json();
+  if (!res.ok) {
+    console.log(`  HTTP ${res.status}:`, JSON.stringify(data).slice(0, 500));
+    return;
+  }
+  if (!data.value || data.value.length === 0) {
+    console.log('  -> Not found via this field.');
+    return;
+  }
+  console.log(`  -> FOUND ${data.value.length} result(s):`);
+  data.value.forEach(v => {
+    console.log(`     ListingKey=${v.ListingKey} ListingId=${v.ListingId} ListOfficeKey=${v.ListOfficeKey} ListingURL=${v.ListingURL}`);
+  });
+}
+
 async function main() {
   const token = await getToken();
   console.log('Token acquired.');
   await tryFilter(token, 'ListingKey', target);
   await tryFilter(token, 'ListingId', target);
+
+  // Also try the realtor.ca internal ID (e.g. 29917662) and a ListingURL substring match,
+  // in case DDF exposes this listing under a different key than the MLS# format.
+  const realtorId = process.argv[3];
+  if (realtorId) {
+    await tryListingUrlContains(token, realtorId);
+  }
 }
 
 main().catch(err => {
