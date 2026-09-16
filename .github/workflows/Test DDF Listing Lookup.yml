@@ -1,0 +1,28 @@
+name: Test DDF Listing Lookup
+
+on:
+  workflow_dispatch:
+    inputs:
+      listing_key:
+        description: 'ListingKey or ListingId to look up on DDF'
+        required: true
+        default: 'X13457322'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Query DDF directly
+        run: node test-ddf-listing.js "${{ github.event.inputs.listing_key }}"
