@@ -228,8 +228,11 @@ function mapForProperty(properties, officeDetails) {
 // =====================
 // Map for grid table (lightweight)
 // =====================
-function mapForGrid(properties) {
+function mapForGrid(properties, officeDetails) {
   return properties.map(p => {
+    const officeKey = p.ListOfficeKey || null;
+    const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
+
     let firstPhoto = null;
     if (Array.isArray(p.Media)) {
       const photo = p.Media.find(m => m.Order === 1);
@@ -245,6 +248,8 @@ function mapForGrid(properties) {
 
     return {
       ListingKey: p.ListingKey,
+      ListOfficeKey: officeKey,
+      OfficeName: officeName,
       TotalActualRent: p.TotalActualRent,
       OriginalEntryTimestamp: p.OriginalEntryTimestamp,
       ListPrice: p.ListPrice,
@@ -265,6 +270,11 @@ function mapForGrid(properties) {
     };
   });
 }
+// NOTE: run the migration below once before deploying this version —
+//   alter table grid add column if not exists "ListOfficeKey" text,
+//                     add column if not exists "OfficeName" text;
+// Old rows will have these as null until their next sync (hash will differ, so
+// they'll pick up the new columns on the very next run automatically).
 
 // =====================
 // Smart upsert — only writes rows that actually changed
@@ -425,44 +435,69 @@ async function main() {
     let nextLink = ddfUrl;
     const allFetchedKeys = [];
     let pageCount = 0;
+    let syncIncomplete = false; // set true if any page fails to load cleanly
+    const MAX_RETRIES_PER_PAGE = 5;
 
     while (nextLink) {
-      try {
-        pageCount++;
-        console.log(`  Page ${pageCount}...`);
+      let retries = 0;
+      let pageSucceeded = false;
 
-        const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await response.json();
+      while (!pageSucceeded) {
+        try {
+          pageCount++;
+          console.log(`  Page ${pageCount}...`);
 
-        if (!data.value) {
-          console.error('DDF returned unexpected response:', JSON.stringify(data).substring(0, 300));
-          break;
+          const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+          const data = await response.json();
+
+          if (!data.value) {
+            // Log the FULL body (not just 300 chars) so rate-limit/auth errors are diagnosable
+            console.error('DDF returned unexpected response:', JSON.stringify(data));
+            syncIncomplete = true;
+            nextLink = null; // stop paginating — we cannot trust anything past this point
+            pageSucceeded = true; // exit inner retry loop, outer while(nextLink) will end too
+            break;
+          }
+
+          if (data.value.length > 0) {
+            const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
+            const officeDetails = await fetchOfficeDetails(token, officeKeys);
+
+            const propertyRows = mapForProperty(data.value, officeDetails);
+            const gridRows = mapForGrid(data.value, officeDetails);
+
+            // Pass pre-loaded hash maps (full sync) or null (incremental — queries per batch)
+            await smartUpsert('property', propertyRows, counters, preloadedHashes?.property ?? null);
+            await smartUpsert('grid', gridRows, counters, preloadedHashes?.grid ?? null);
+          }
+
+          allFetchedKeys.push(...data.value.map(p => p.ListingKey));
+          nextLink = data['@odata.nextLink'] || null;
+          pageSucceeded = true;
+        } catch (error) {
+          retries++;
+          console.error(`\nError on page ${pageCount} (attempt ${retries}/${MAX_RETRIES_PER_PAGE}):`, error.message);
+          if (retries >= MAX_RETRIES_PER_PAGE) {
+            console.error(`  Giving up on page ${pageCount} after ${MAX_RETRIES_PER_PAGE} attempts — marking sync incomplete.`);
+            syncIncomplete = true;
+            nextLink = null;
+            pageSucceeded = true; // stop retrying this page
+            break;
+          }
+          console.log('  Retrying in 5 seconds...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
-
-        if (data.value.length > 0) {
-          const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-          const officeDetails = await fetchOfficeDetails(token, officeKeys);
-
-          const propertyRows = mapForProperty(data.value, officeDetails);
-          const gridRows = mapForGrid(data.value);
-
-          // Pass pre-loaded hash maps (full sync) or null (incremental — queries per batch)
-          await smartUpsert('property', propertyRows, counters, preloadedHashes?.property ?? null);
-          await smartUpsert('grid', gridRows, counters, preloadedHashes?.grid ?? null);
-        }
-
-        allFetchedKeys.push(...data.value.map(p => p.ListingKey));
-        nextLink = data['@odata.nextLink'] || null;
-      } catch (error) {
-        console.error(`\nError on page ${pageCount}:`, error.message);
-        console.log('  Retrying in 5 seconds...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
 
-    // Full deletion check — only during daily full sync
-    if (isFullSync && allFetchedKeys.length > 0) {
+    // Full deletion check — only during daily full sync, and ONLY if every page of the
+    // DDF feed was fetched successfully. Deleting based on a partial fetch would wipe out
+    // real, still-active listings that simply weren't reached before a transient failure.
+    if (isFullSync && !syncIncomplete && allFetchedKeys.length > 0) {
       await runFullDeletionCheck(allFetchedKeys, counters);
+    } else if (isFullSync && syncIncomplete) {
+      console.warn('\n⚠️  Skipping deletion check — this sync did not complete cleanly (see errors above). ' +
+        'No listings were deleted this run to avoid removing valid data based on a partial fetch.');
     }
 
     await saveLastSyncTime();
