@@ -7,6 +7,10 @@ on:
         description: 'ListingKey or ListingId to look up on DDF'
         required: true
         default: 'X13457322'
+      realtor_id:
+        description: 'Optional: realtor.ca internal ID to try as a ListingURL substring match (e.g. 29917662)'
+        required: false
+        default: '29917662'
 
 jobs:
   test:
@@ -25,4 +29,4 @@ jobs:
         run: npm install
 
       - name: Query DDF directly
-        run: node test-ddf-listing.js "${{ github.event.inputs.listing_key }}"
+        run: node test-ddf-listing.js "${{ github.event.inputs.listing_key }}" "${{ github.event.inputs.realtor_id }}"
