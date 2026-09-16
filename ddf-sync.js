@@ -1,5 +1,6 @@
 // ddf-sync.js — Combined incremental DDF sync with dead-row prevention
 // OPTIMIZED: Pre-loads all hashes once per run (reduces ~7,900 DB queries/day → ~14)
+// OPTIMIZED (2): Office details are now cached once per run — previously re-fetched per page
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 import crypto from 'crypto';
@@ -120,27 +121,28 @@ async function fetchAllHashes(table) {
 
 // =====================
 // Fetch office details (individual — DDF doesn't support batch or filters)
+// Now backed by a cache that's shared across the whole run (passed in from main()),
+// so each distinct office is looked up at most once per sync instead of once per page.
 // =====================
-async function fetchOfficeDetails(token, officeKeys) {
-  const uniqueKeys = [...new Set(officeKeys)].filter(Boolean);
-  if (uniqueKeys.length === 0) return {};
+async function fetchOfficeDetails(token, officeKeys, cache) {
+  const uniqueKeys = [...new Set(officeKeys)].filter(Boolean).filter(key => !cache.has(key));
 
-  const officeDetails = {};
+  if (uniqueKeys.length > 0) {
+    await Promise.all(uniqueKeys.map(async key => {
+      try {
+        const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        cache.set(key, (data.value && data.value[0]?.OfficeName) || 'Unknown');
+      } catch (error) {
+        console.error(`Error fetching office ${key}:`, error.message);
+        cache.set(key, 'Unknown');
+      }
+    }));
+  }
 
-  await Promise.all(uniqueKeys.map(async key => {
-    try {
-      const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await response.json();
-      officeDetails[key] = (data.value && data.value[0]?.OfficeName) || 'Unknown';
-    } catch (error) {
-      console.error(`Error fetching office ${key}:`, error.message);
-      officeDetails[key] = 'Unknown';
-    }
-  }));
-
-  return officeDetails;
+  return cache;
 }
 
 // =====================
@@ -149,7 +151,7 @@ async function fetchOfficeDetails(token, officeKeys) {
 function mapForProperty(properties, officeDetails) {
   return properties.map(property => {
     const officeKey = property.ListOfficeKey || null;
-    const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
+    const officeName = officeKey ? officeDetails.get(officeKey) || 'Unknown' : 'Unknown';
 
     return {
       ListingKey: property.ListingKey,
@@ -231,7 +233,7 @@ function mapForProperty(properties, officeDetails) {
 function mapForGrid(properties, officeDetails) {
   return properties.map(p => {
     const officeKey = p.ListOfficeKey || null;
-    const officeName = officeKey ? officeDetails[officeKey] || 'Unknown' : 'Unknown';
+    const officeName = officeKey ? officeDetails.get(officeKey) || 'Unknown' : 'Unknown';
 
     let firstPhoto = null;
     if (Array.isArray(p.Media)) {
@@ -407,6 +409,10 @@ async function main() {
     const token = await getAccessToken();
     const lastSync = await getLastSyncTime();
 
+    // Shared office-name cache for the whole run — populated as new offices are seen,
+    // reused across every page so each office is looked up at most once per sync.
+    const officeCache = new Map();
+
     // -------------------------------------------------------
     // FULL SYNC: pre-load all hashes once before the page loop
     // This replaces ~1,134 per-page hash SELECTs with ~57 total
@@ -461,7 +467,7 @@ async function main() {
 
           if (data.value.length > 0) {
             const officeKeys = data.value.map(p => p.ListOfficeKey).filter(Boolean);
-            const officeDetails = await fetchOfficeDetails(token, officeKeys);
+            const officeDetails = await fetchOfficeDetails(token, officeKeys, officeCache);
 
             const propertyRows = mapForProperty(data.value, officeDetails);
             const gridRows = mapForGrid(data.value, officeDetails);
@@ -506,6 +512,7 @@ async function main() {
     console.log(`  Property: ${counters.property.added} new, ${counters.property.updated} changed, ${counters.property.unchanged} unchanged (skipped)`);
     console.log(`  Grid:     ${counters.grid.added} new, ${counters.grid.updated} changed, ${counters.grid.unchanged} unchanged (skipped)`);
     console.log(`  Deleted:  ${counters.deleted}`);
+    console.log(`  Office lookups cached: ${officeCache.size}`);
     console.log(`  Pages:    ${pageCount}`);
 
     process.exit(0);
