@@ -38,16 +38,20 @@ async function main() {
 
   const { data: myListings, error } = await supabase
     .from('property')
-    .select('ListingKey, ListPrice, UnparsedAddress, City, BedroomsTotal, BathroomsTotalInteger, ParkingTotal, LivingArea, AboveGradeFinishedArea, Media, ListingURL')
+    .select('ListingKey, ListPrice, UnparsedAddress, City, BedroomsTotal, BathroomsTotalInteger, ParkingTotal, LivingArea, AboveGradeFinishedArea, Media, ListingURL, TotalActualRent')
     .eq('ListOfficeKey', MY_OFFICE_KEY);
 
   if (error) throw new Error(`Failed to read property: ${error.message}`);
   console.log(`  Found ${myListings.length} active listing(s) for this office.`);
 
+  // sold-listings.js (the front-end widget) only recognizes these exact status strings
+  // (case-insensitive): "for sale" / "for lease" as available, "sold" / "leased" / "purchased"
+  // as closed. `property` has no explicit sale-vs-lease field, so TotalActualRent being set
+  // is used as the signal that this is a lease listing.
   const rows = myListings.map(p => ({
     listing_key: p.ListingKey,
     source: 'ddf_sync',
-    status: 'Active',
+    status: p.TotalActualRent ? 'For Lease' : 'For Sale',
     price: p.ListPrice,
     listed_price: p.ListPrice,
     address: [p.UnparsedAddress, p.City].filter(Boolean).join(', '),
@@ -71,7 +75,10 @@ async function main() {
 
   // Mark previously-synced rows that are no longer active for this office as 'Off Market'
   // instead of deleting them — deletion would destroy the record entirely, and we can't tell
-  // sold vs. withdrawn vs. expired from the DDF feed alone.
+  // sold vs. withdrawn vs. expired from the DDF feed alone. NOTE: 'Off Market' is deliberately
+  // NOT one of the statuses sold-listings.js recognizes, so these rows quietly stop appearing
+  // on the site the moment a listing leaves DDF — until you manually edit that row's status to
+  // 'Sold'/'Leased'/'Purchased' (with the real closing price) once you know the actual outcome.
   const currentKeys = rows.map(r => r.listing_key);
   const { data: staleRows, error: staleErr } = await supabase
     .from('sold')
