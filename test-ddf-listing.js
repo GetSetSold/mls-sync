@@ -72,6 +72,32 @@ async function tryListingUrlContains(token, value) {
   });
 }
 
+async function surveyOfficeStatuses(token, officeKey) {
+  // DDF's public/IDX feed almost always only carries ACTIVE listings — closed (sold/leased)
+  // ones typically drop out of the feed entirely. This checks what statuses your own office's
+  // listings actually come back with, so we know for certain whether your credential has any
+  // access to closed data at all, rather than assuming.
+  const url = `${PROPERTY_URL}?$filter=ListOfficeKey eq '${officeKey}'&$top=100`;
+  console.log(`\nSurveying all statuses returned for ListOfficeKey eq '${officeKey}' (up to 100 rows):`);
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json();
+  if (!res.ok) {
+    console.log(`  HTTP ${res.status}:`, JSON.stringify(data).slice(0, 500));
+    return;
+  }
+  if (!data.value || data.value.length === 0) {
+    console.log('  -> No rows returned for this office at all.');
+    return;
+  }
+  const statusCounts = {};
+  data.value.forEach(v => {
+    const s = v.StandardStatus || v.MlsStatus || '(none)';
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+  console.log(`  -> ${data.value.length} row(s) returned. Status breakdown:`, JSON.stringify(statusCounts));
+  console.log('  (If only "Active" appears here, the feed is not giving you closed/leased/sold data at all — that has to come from manual entry, not DDF.)');
+}
+
 async function main() {
   const token = await getToken();
   console.log('Token acquired.');
@@ -84,6 +110,8 @@ async function main() {
   if (realtorId) {
     await tryListingUrlContains(token, realtorId);
   }
+
+  await surveyOfficeStatuses(token, '291890');
 }
 
 main().catch(err => {
