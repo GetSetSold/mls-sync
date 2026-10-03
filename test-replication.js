@@ -65,16 +65,18 @@ if (dest?.value) {
 }
 
 // 2. Replication shape probe
-const rep = await get(token, '/Property/PropertyReplication()?$top=3', 'PropertyReplication() shape probe');
+const rep = await get(token, '/Property/PropertyReplication()', 'PropertyReplication() shape probe');
 if (rep?.value) {
-  console.log(`  ${rep.value.length} item(s); keys of first item: ${Object.keys(rep.value[0] || {}).join(', ')}`);
+  console.log(`  page items: ${rep.value.length}; keys of first item: ${Object.keys(rep.value[0] || {}).join(', ')}`);
   console.log('  First item raw:', JSON.stringify(rep.value[0]).slice(0, 400));
   console.log(`  @odata.nextLink present: ${!!rep['@odata.nextLink']}`);
   if (rep['@odata.count'] !== undefined) console.log(`  @odata.count: ${rep['@odata.count']}`);
+  const keys = rep.value.map(r => r.ListingKey).filter(Boolean);
+  console.log(`  target ${targetKey} on first page: ${keys.includes(targetKey) ? 'YES' : 'no'}`);
 }
 
 // 3. Is the missing listing in the replication feed?
-const found = await get(token, `/Property/PropertyReplication()?$filter=ListingKey eq '${targetKey}'&$top=5`, `Replication lookup ListingKey=${targetKey}`);
+const found = await get(token, `/Property/PropertyReplication()?$filter=ListingKey eq '${targetKey}'`, `Replication lookup ListingKey=${targetKey}`);
 if (found?.value) {
   console.log(`  -> ${found.value.length} result(s)`);
   for (const r of found.value) console.log('  ', JSON.stringify(r).slice(0, 300));
@@ -83,7 +85,7 @@ if (found?.value) {
 // 4. Scoped variant (uses first destination id if we found one)
 const firstId = dest?.value?.[0]?.DestinationId;
 if (firstId) {
-  const scoped = await get(token, `/Property/PropertyReplication(DestinationId=${firstId})?$filter=ListingKey eq '${targetKey}'&$top=5`, `Scoped replication lookup (DestinationId=${firstId})`);
+  const scoped = await get(token, `/Property/PropertyReplication(DestinationId=${firstId})?$filter=ListingKey eq '${targetKey}'`, `Scoped replication lookup (DestinationId=${firstId})`);
   if (scoped?.value) console.log(`  -> ${scoped.value.length} result(s)`);
 } else {
   console.log('\nSkipping scoped variant — no DestinationId found.');
