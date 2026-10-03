@@ -13,10 +13,23 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 async function geocodeCity(cityName) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityName + ', Ontario, Canada')}&limit=1`;
 
+  // Nominatim usage policy: max 1 request/second — faster risks an IP ban.
+  await new Promise(r => setTimeout(r, 1100));
+
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Supabase-CityUpdater/1.0' },
+    headers: { 'User-Agent': 'Supabase-CityUpdater/1.0 (getsetsold.ca admin)' },
   });
-  const data = await res.json();
+  if (!res.ok) {
+    console.warn(`   ⚠️ Nominatim HTTP ${res.status} for ${cityName}`);
+    return null;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    console.warn(`   ⚠️ Nominatim returned non-JSON for ${cityName}`);
+    return null;
+  }
 
   if (data.length > 0) {
     return {
