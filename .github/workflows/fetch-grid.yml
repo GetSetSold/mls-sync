@@ -1,8 +1,8 @@
-name: DDF Grid Sync
+name: DDF Grid Sync (manual fallback only)
 
+# Schedule removed — ddf-sync.js fully covers the grid table.
+# Kept as a manual fallback via workflow_dispatch.
 on:
-  schedule:
-    - cron: '0 14 * * *'  # 9 AM EST
   workflow_dispatch:
 
 jobs:
@@ -12,10 +12,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
@@ -26,4 +26,5 @@ jobs:
         run: node fetch-grid.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
+          DDF_CLIENT_SECRET: ${{ secrets.DDF_CLIENT_SECRET }}
