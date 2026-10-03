@@ -17,8 +17,9 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // CREA DDF API
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
-const CLIENT_ID = 'CTV6OHOBvqo3TVVLvu4FdgAu';
-const CLIENT_SECRET = 'rFmp8o58WP5uxTD0NDUsvHov';
+const CLIENT_ID = process.env.DDF_CLIENT_ID;
+const CLIENT_SECRET = process.env.DDF_CLIENT_SECRET;
+if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('Missing DDF_CLIENT_ID / DDF_CLIENT_SECRET environment variables');
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 
 const MAX_RETRIES_PER_PAGE = 5;
@@ -133,16 +134,29 @@ async function savePropertiesToGrid(properties, counters) {
 // =====================
 async function deleteNonMatchingProperties(listingKeys, counters) {
   try {
-    const { data: existingKeys, error: fetchError } = await supabase
-      .from('grid')
-      .select('ListingKey');
-
-    if (fetchError) {
-      console.error('Error fetching existing keys for deletion:', fetchError.message);
-      return;
+    // Paginated: a bare .select() is capped by PostgREST (default 1,000 rows) while grid
+    // holds ~56k — without this, stale rows past the cap are never cleaned up.
+    const existingKeys = [];
+    {
+      let from = 0;
+      const BATCH = 1000;
+      while (true) {
+        const { data, error: pageError } = await supabase
+          .from('grid')
+          .select('ListingKey')
+          .range(from, from + BATCH - 1);
+        if (pageError) {
+          console.error('Error fetching existing keys for deletion:', pageError.message);
+          return;
+        }
+        if (!data || data.length === 0) break;
+        for (const r of data) existingKeys.push(r.ListingKey);
+        if (data.length < BATCH) break;
+        from += BATCH;
+      }
     }
 
-    const existingSet = new Set(existingKeys.map(r => r.ListingKey));
+    const existingSet = new Set(existingKeys);
     const latestSet = new Set(listingKeys);
     const toDelete = [...existingSet].filter(key => !latestSet.has(key));
 
