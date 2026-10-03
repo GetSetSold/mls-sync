@@ -11,17 +11,18 @@ if (!supabaseKey) throw new Error('Missing SUPABASE_KEY environment variable');
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// CREA DDF API
+// CREA DDF API — credentials come from env (GitHub secrets), never hardcoded.
+// The old hardcoded values are in git history of this public repo: rotate them with CREA.
 const TOKEN_URL = 'https://identity.crea.ca/connect/token';
-const CLIENT_ID = 'CTV6OHOBvqo3TVVLvu4FdgAu';
-const CLIENT_SECRET = 'rFmp8o58WP5uxTD0NDUsvHov';
+const CLIENT_ID = process.env.DDF_CLIENT_ID;
+const CLIENT_SECRET = process.env.DDF_CLIENT_SECRET;
+if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('Missing DDF_CLIENT_ID / DDF_CLIENT_SECRET environment variables');
 const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
 const SYNC_STATE_TABLE = 'sync_state';
 
-// For full sync: fetch all 56k listings per page (max allowed by CREA DDF)
-const DDF_PAGE_SIZE = 100; // CREA DDF hard cap
+const DDF_PAGE_SIZE = 100; // CREA DDF hard cap per page
 // Hash-check SELECT batch size when NOT using pre-loaded map (incremental fallback)
 const HASH_FETCH_BATCH = 1000;
 // Upsert write batch size
@@ -120,6 +121,31 @@ async function fetchAllHashes(table) {
 }
 
 // =====================
+// Fetch ALL ListingKeys for a table, paginated.
+// A bare .select() is capped by PostgREST (default 1,000 rows) while these tables hold
+// ~56k — without pagination the deletion check silently misses stale rows past the cap.
+// =====================
+async function fetchAllKeys(table) {
+  const keys = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('ListingKey')
+      .range(from, from + HASH_FETCH_BATCH - 1);
+    if (error) {
+      console.error(`Error fetching ${table} keys:`, error.message);
+      return null;
+    }
+    if (!data || data.length === 0) break;
+    for (const r of data) keys.push(r.ListingKey);
+    if (data.length < HASH_FETCH_BATCH) break;
+    from += HASH_FETCH_BATCH;
+  }
+  return keys;
+}
+
+// =====================
 // Fetch office details (individual — DDF doesn't support batch or filters)
 // Now backed by a cache that's shared across the whole run (passed in from main()),
 // so each distinct office is looked up at most once per sync instead of once per page.
@@ -127,19 +153,33 @@ async function fetchAllHashes(table) {
 async function fetchOfficeDetails(token, officeKeys, cache) {
   const uniqueKeys = [...new Set(officeKeys)].filter(Boolean).filter(key => !cache.has(key));
 
-  if (uniqueKeys.length > 0) {
-    await Promise.all(uniqueKeys.map(async key => {
+  // One retry before caching 'Unknown': a transient Office API blip would otherwise flip
+  // OfficeName for every one of that office's listings, churning their change-hashes and
+  // causing a mass rewrite on an otherwise quiet run.
+  async function lookupOffice(key) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const response = await fetch(`${OFFICE_URL}?$filter=OfficeKey eq '${key.trim()}'`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await response.json();
-        cache.set(key, (data.value && data.value[0]?.OfficeName) || 'Unknown');
+        return (data.value && data.value[0]?.OfficeName) || 'Unknown';
       } catch (error) {
-        console.error(`Error fetching office ${key}:`, error.message);
-        cache.set(key, 'Unknown');
+        if (attempt === 2) {
+          console.error(`Error fetching office ${key}:`, error.message);
+          return 'Unknown';
+        }
+        await new Promise(r => setTimeout(r, 2000));
       }
-    }));
+    }
+  }
+
+  // Bound concurrency: early full-sync pages can hold hundreds of distinct offices.
+  const OFFICE_CONCURRENCY = 10;
+  for (let i = 0; i < uniqueKeys.length; i += OFFICE_CONCURRENCY) {
+    const chunk = uniqueKeys.slice(i, i + OFFICE_CONCURRENCY);
+    const names = await Promise.all(chunk.map(lookupOffice));
+    chunk.forEach((k, idx) => cache.set(k, names[idx]));
   }
 
   return cache;
@@ -354,16 +394,10 @@ async function runFullDeletionCheck(allFetchedKeys, counters) {
 
   for (const table of ['property', 'grid']) {
     try {
-      const { data: existingKeys, error } = await supabase
-        .from(table)
-        .select('ListingKey');
+      const existingKeys = await fetchAllKeys(table);
+      if (!existingKeys) continue; // error already logged above
 
-      if (error) {
-        console.error(`Error fetching ${table} keys:`, error.message);
-        continue;
-      }
-
-      const toDelete = (existingKeys || [])
+      const toDelete = existingKeys
         .map(r => r.ListingKey)
         .filter(key => !latestSet.has(key));
 
@@ -406,7 +440,8 @@ async function main() {
     };
 
     const isFullSync = process.env.FULL_SYNC === 'true';
-    const token = await getAccessToken();
+    let token = await getAccessToken();
+    let tokenFetchedAt = Date.now();
     const lastSync = await getLastSyncTime();
 
     // Shared office-name cache for the whole run — populated as new offices are seen,
@@ -452,6 +487,14 @@ async function main() {
         try {
           pageCount++;
           console.log(`  Page ${pageCount}...`);
+
+          // Full syncs can run long — refresh the DDF token before it expires (~1h)
+          // so later pages don't start 401ing and mark the run incomplete.
+          if (Date.now() - tokenFetchedAt > 50 * 60 * 1000) {
+            console.log('  Refreshing DDF access token...');
+            token = await getAccessToken();
+            tokenFetchedAt = Date.now();
+          }
 
           const response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
           const data = await response.json();
@@ -506,7 +549,15 @@ async function main() {
         'No listings were deleted this run to avoid removing valid data based on a partial fetch.');
     }
 
-    await saveLastSyncTime();
+    // Only advance the checkpoint on a clean run. Saving it after a partial run would make
+    // the next incremental sync skip listings modified in the failed window (until the next
+    // full sync) — instead the next run re-scans from the previous good checkpoint.
+    if (!syncIncomplete) {
+      await saveLastSyncTime();
+    } else {
+      console.warn('\n⚠️  Not updating last_sync — this run did not complete cleanly. ' +
+        'The next incremental sync will re-scan from the previous checkpoint.');
+    }
 
     console.log('\n✅ Sync complete!');
     console.log(`  Property: ${counters.property.added} new, ${counters.property.updated} changed, ${counters.property.unchanged} unchanged (skipped)`);
