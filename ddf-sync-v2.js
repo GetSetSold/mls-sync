@@ -114,37 +114,50 @@ async function fetchDbState(table, withTimestamp) {
 }
 
 // =====================
-// 3. Fetch full Property records for a batch of keys.
-//    Tries a batched $filter first; on failure, splits in half recursively
-//    down to single-record lookups so one bad key can't kill the batch.
+// 3. Fetch full Property records via concurrent single-record lookups.
+//    DDF's Property endpoint rejects batched $filter on ListingKey
+//    (HTTP 400), so go straight to /Property('key') with concurrency.
+//    One bad key returns null and can't kill the rest.
 // =====================
+const FETCH_CONCURRENCY = 10;
+
 async function fetchFullRecords(keys) {
-  if (keys.length === 0) return [];
-  if (keys.length === 1) {
-    // Single-record lookup, function-style per DDF docs
-    const url = `${PROPERTY_URL}('${encodeURIComponent(keys[0])}')`;
-    const res = await fetch(url, { headers: await authHeaders() });
-    const data = await res.json();
-    if (!res.ok) {
-      console.error(`  Single fetch failed for ${keys[0]}: HTTP ${res.status}`);
-      return [];
-    }
-    return data.value ? data.value : [data];
+  const results = [];
+  for (let i = 0; i < keys.length; i += FETCH_CONCURRENCY) {
+    const chunk = keys.slice(i, i + FETCH_CONCURRENCY);
+    const fetched = await Promise.all(chunk.map(async (key) => {
+      try {
+        const url = `${PROPERTY_URL}('${encodeURIComponent(key)}')`;
+        const res = await fetch(url, { headers: await authHeaders() });
+        const data = await res.json();
+        if (!res.ok) {
+          console.error(`  Fetch failed for ${key}: HTTP ${res.status}`);
+          return null;
+        }
+        if (Array.isArray(data.value)) return data.value[0] || null;
+        if (data && data.ListingKey) return data;
+        console.error(`  Fetch failed for ${key}: unexpected shape`);
+        return null;
+      } catch (e) {
+        console.error(`  Fetch failed for ${key}: ${e.message}`);
+        return null;
+      }
+    }));
+    for (const r of fetched) if (r) results.push(r);
+    process.stdout.write(`\r  Fetched ${results.length}/${keys.length}...`);
   }
-  const filter = keys.map(k => `ListingKey eq '${k.replace(/'/g, "''")}'`).join(' or ');
-  const url = `${PROPERTY_URL}?$top=${keys.length * 2}&$filter=${encodeURIComponent(filter)}`;
-  try {
-    const res = await fetch(url, { headers: await authHeaders() });
-    const data = await res.json();
-    if (!res.ok || !Array.isArray(data.value)) throw new Error(`HTTP ${res.status}`);
-    return data.value;
-  } catch (e) {
-    console.error(`  Batched fetch failed (${keys.length} keys): ${e.message} — splitting`);
-    const mid = Math.ceil(keys.length / 2);
-    const a = await fetchFullRecords(keys.slice(0, mid));
-    const b = await fetchFullRecords(keys.slice(mid));
-    return [...a, ...b];
-  }
+  console.log('');
+  return results;
+}
+
+// Normalize DDF timestamps for comparison: the replication feed and the
+// Property endpoint serialize fractional seconds differently
+// (e.g. "...T16:35:12.59Z" vs "...T16:35:12.590Z"), so raw string
+// comparison flags every row as changed. Compare parsed epoch ms instead.
+function tsKey(ts) {
+  if (!ts) return 0;
+  const t = new Date(ts).getTime();
+  return Number.isNaN(t) ? 0 : t;
 }
 
 // =====================
@@ -346,7 +359,7 @@ async function main() {
     const toFetch = [];
     for (const { key, ts } of identifiers) {
       if (!dbProperty.has(key)) { counters.added++; toFetch.push(key); }
-      else if (dbProperty.get(key) !== ts) { counters.updated++; toFetch.push(key); }
+      else if (tsKey(dbProperty.get(key)) !== tsKey(ts)) { counters.updated++; toFetch.push(key); }
     }
     const toDeleteProp = [...dbProperty.keys()].filter(k => !liveKeys.has(k));
     const toDeleteGrid = [...dbGridKeys.keys()].filter(k => !liveKeys.has(k));
