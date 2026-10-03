@@ -80,11 +80,14 @@ async function main() {
   // on the site the moment a listing leaves DDF — until you manually edit that row's status to
   // 'Sold'/'Leased'/'Purchased' (with the real closing price) once you know the actual outcome.
   const currentKeys = rows.map(r => r.listing_key);
+  // Only rows still showing as available are candidates for 'Off Market'. Rows you manually
+  // resolved to Sold/Leased/Purchased must never be touched here — the old filter
+  // (.not('status','eq','Off Market')) flipped them back 30 minutes after every manual edit.
   const { data: staleRows, error: staleErr } = await supabase
     .from('sold')
     .select('id, listing_key, status')
     .eq('source', 'ddf_sync')
-    .not('status', 'eq', 'Off Market');
+    .in('status', ['For Sale', 'For Lease']);
 
   if (staleErr) throw new Error(`Failed to check stale rows: ${staleErr.message}`);
 
