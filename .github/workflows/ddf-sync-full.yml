@@ -26,4 +26,6 @@ jobs:
         run: node ddf-sync.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
+          DDF_CLIENT_SECRET: ${{ secrets.DDF_CLIENT_SECRET }}
           FULL_SYNC: 'true'
