@@ -1,0 +1,28 @@
+name: DDF Sync v2 (replication test)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run replication-based DDF sync
+        run: node ddf-sync-v2.js
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
+          DDF_CLIENT_SECRET: ${{ secrets.DDF_CLIENT_SECRET }}
