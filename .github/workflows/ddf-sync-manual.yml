@@ -1,4 +1,4 @@
-name: DDF Sync v2 (replication test)
+name: DDF Sync (Manual Run)
 
 on:
   workflow_dispatch:
