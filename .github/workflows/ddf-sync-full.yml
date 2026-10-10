@@ -23,7 +23,7 @@ jobs:
         run: npm install
 
       - name: Run full DDF sync with deletion check
-        run: node ddf-sync.js
+        run: node ddf-sync-v2.js
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
