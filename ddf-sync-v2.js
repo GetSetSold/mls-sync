@@ -99,16 +99,23 @@ async function fetchReplicationIdentifiers() {
 // 2. Scan DB keys + their stored ModificationTimestamp (property table has it)
 // =====================
 async function fetchDbState(table, withTimestamp) {
+  // Keyset pagination (not OFFSET): each batch reads only its own rows via the
+  // ListingKey index instead of re-scanning from the start every time.
+  // OFFSET on 57k rows re-reads ~29x the table per sync and burns the free-plan Disk IO budget.
   const cols = withTimestamp ? 'ListingKey, ModificationTimestamp' : 'ListingKey';
   const map = new Map();
-  let from = 0;
+  let lastKey = null;
   while (true) {
-    const { data, error } = await supabase.from(table).select(cols).range(from, from + DB_SCAN_BATCH - 1);
+    let q = supabase.from(table).select(cols).order('ListingKey', { ascending: true }).limit(DB_SCAN_BATCH);
+    if (lastKey !== null) q = q.gt('ListingKey', lastKey);
+    const { data, error } = await q;
     if (error) throw new Error(`DB scan failed for ${table}: ${error.message}`);
     if (!data || data.length === 0) break;
-    for (const r of data) map.set(r.ListingKey, withTimestamp ? (r.ModificationTimestamp || null) : true);
+    for (const r of data) {
+      map.set(r.ListingKey, withTimestamp ? (r.ModificationTimestamp || null) : true);
+      lastKey = r.ListingKey;
+    }
     if (data.length < DB_SCAN_BATCH) break;
-    from += DB_SCAN_BATCH;
   }
   return map;
 }
