@@ -31,6 +31,17 @@ const PROPERTY_URL = 'https://ddfapi.realtor.ca/odata/v1/Property';
 const REPLICATION_URL = 'https://ddfapi.realtor.ca/odata/v1/Property/PropertyReplication()';
 const OFFICE_URL = 'https://ddfapi.realtor.ca/odata/v1/Office';
 
+// Sync safety guards (RealtyPress-style: never let a truncated feed wipe the DB).
+// All three are checked BEFORE any upsert or delete, so a failed run leaves the
+// previous good data untouched and the next scheduled run retries it:
+//   - Empty feed: replication returns 0 identifiers -> abort.
+//   - Truncated feed: replication returns < 50% of the current DB size -> abort.
+//   - Mass deletion: > 20% of DB rows would be deleted in one run -> abort.
+// A normal day deletes a small fraction of listings; a 20%+ single-run deletion
+// is a feed/DB problem, not normal churn, and needs a human look first.
+const MIN_REPLICATION_FRACTION = 0.5;
+const MAX_DELETION_FRACTION = 0.2;
+
 // How many ListingKeys per batched $filter when pulling full records
 const FETCH_BATCH_SIZE = 50;
 // Upsert write batch size
@@ -277,10 +288,14 @@ function mapForGrid(properties, officeDetails) {
   return properties.map(p => {
     const officeKey = p.ListOfficeKey || null;
     const officeName = officeKey ? officeDetails.get(officeKey) || 'Unknown' : 'Unknown';
+    // Photo repair (RealtyPress-style repair_missing_photos, remote-URL form):
+    // if no Order-1 photo exists, fall back to the first photo instead of a
+    // null card image. A listing with photos should never render photo-less
+    // just because its primary photo lost its Order flag.
     let firstPhoto = null;
-    if (Array.isArray(p.Media)) {
-      const photo = p.Media.find(m => m.Order === 1);
-      if (photo) firstPhoto = photo.MediaURL;
+    if (Array.isArray(p.Media) && p.Media.length) {
+      const photo = p.Media.find(m => m.Order === 1) || p.Media[0];
+      if (photo) firstPhoto = photo.MediaURL || null;
     }
     let structureTypeText = null;
     if (Array.isArray(p.StructureType) && p.StructureType.length > 0) {
@@ -347,7 +362,7 @@ async function deleteKeys(table, keys) {
 // =====================
 async function main() {
   const t0 = Date.now();
-  const counters = { added: 0, updated: 0, deleted: 0, fetched: 0 };
+  const counters = { added: 0, updated: 0, deleted: 0, fetched: 0, orphans: 0, fetchFailed: 0 };
   try {
     await getAccessToken();
 
@@ -356,21 +371,61 @@ async function main() {
     const liveKeys = new Set(identifiers.map(r => r.key));
     const liveTs = new Map(identifiers.map(r => [r.key, r.ts]));
 
+    // Duplicate identifiers in the feed: ListingKey is the PK in both tables,
+    // so duplicates cannot create duplicate DB rows, but log them — a feed
+    // that starts duplicating keys is a feed problem worth seeing in the log.
+    if (identifiers.length !== liveKeys.size) {
+      console.warn(`  WARNING: replication feed had ${identifiers.length - liveKeys.size} duplicate ListingKey(s) (${identifiers.length} rows, ${liveKeys.size} unique)`);
+    }
+
     // 2. Current DB state
     console.log('Scanning DB keys...');
     const dbProperty = await fetchDbState('property', true);   // key -> ModificationTimestamp
     const dbGridKeys = await fetchDbState('grid', false);       // key -> true
     console.log(`  DB: ${dbProperty.size} property rows, ${dbGridKeys.size} grid rows`);
 
+    // SAFETY GUARD 1 — empty / truncated feed, before any write.
+    // A 0-row or half-size replication set is a truncated/outage feed, not a
+    // market that lost half its listings overnight. Refuse to act on it.
+    if (liveKeys.size === 0) {
+      throw new Error('SAFETY ABORT: replication feed returned 0 identifiers — refusing to delete/update anything. Previous data left untouched.');
+    }
+    // Use unique live keys, not raw rows: duplicate feed rows must not inflate
+    // the count past the threshold.
+    if (dbProperty.size > 1000 && liveKeys.size < MIN_REPLICATION_FRACTION * dbProperty.size) {
+      throw new Error(`SAFETY ABORT: replication feed returned only ${liveKeys.size} unique identifiers vs ${dbProperty.size} DB rows (< ${MIN_REPLICATION_FRACTION * 100}%) — truncated feed suspected. Previous data left untouched.`);
+    }
+
     // 3. Diff
-    const toFetch = [];
+    const toFetchSet = new Set();
     for (const { key, ts } of identifiers) {
-      if (!dbProperty.has(key)) { counters.added++; toFetch.push(key); }
-      else if (tsKey(dbProperty.get(key)) !== tsKey(ts)) { counters.updated++; toFetch.push(key); }
+      if (!dbProperty.has(key)) { counters.added++; toFetchSet.add(key); }
+      else if (tsKey(dbProperty.get(key)) !== tsKey(ts)) { counters.updated++; toFetchSet.add(key); }
     }
     const toDeleteProp = [...dbProperty.keys()].filter(k => !liveKeys.has(k));
     const toDeleteGrid = [...dbGridKeys.keys()].filter(k => !liveKeys.has(k));
+
+    // SAFETY GUARD 2 — mass deletion, before any write.
+    // Deleting > 20% of the DB in one run is not normal daily churn.
+    if (dbProperty.size > 0 && toDeleteProp.length > MAX_DELETION_FRACTION * dbProperty.size) {
+      throw new Error(`SAFETY ABORT: ${toDeleteProp.length} property rows would be deleted (${((toDeleteProp.length / dbProperty.size) * 100).toFixed(1)}% of ${dbProperty.size}) — over the ${MAX_DELETION_FRACTION * 100}% mass-deletion cap. Previous data left untouched; check the feed manually and re-run.`);
+    }
     console.log(`Diff: ${counters.added} new, ${counters.updated} changed, ${toDeleteProp.length} to delete`);
+
+    // ORPHAN REPAIR (RealtyPress fix_orphaned_listing_posts, live-key form):
+    // a live key present in one table but missing from the other is a broken
+    // relation — the grid card would have no detail page, or the detail page
+    // would have no grid card. Refetch those keys so both tables get the row.
+    // This is a repair, not a deletion: orphans are live, so fetching them is
+    // safe even if the orphan count is large.
+    const orphanGridOnly = [...dbGridKeys.keys()].filter(k => liveKeys.has(k) && !dbProperty.has(k));
+    const orphanPropertyOnly = [...dbProperty.keys()].filter(k => liveKeys.has(k) && !dbGridKeys.has(k));
+    for (const k of [...orphanGridOnly, ...orphanPropertyOnly]) toFetchSet.add(k);
+    counters.orphans = new Set([...orphanGridOnly, ...orphanPropertyOnly]).size;
+    if (counters.orphans) {
+      console.log(`  Orphan repair: ${orphanGridOnly.length} grid-only, ${orphanPropertyOnly.length} property-only live keys will be refetched`);
+    }
+    const toFetch = [...toFetchSet];
 
     // 4. Fetch full records only for new/changed, then upsert both tables
     const officeCache = new Map();
@@ -378,6 +433,7 @@ async function main() {
       const batchKeys = toFetch.slice(i, i + FETCH_BATCH_SIZE);
       const records = await fetchFullRecords(batchKeys);
       counters.fetched += records.length;
+      counters.fetchFailed += batchKeys.length - records.length;
       if (records.length === 0) continue;
       await fetchOfficeDetails(records.map(r => r.ListOfficeKey), officeCache);
       await upsertBatch('property', mapForProperty(records, officeCache));
@@ -386,14 +442,16 @@ async function main() {
     }
     console.log('');
 
-    // 5. Delete keys gone from the feed (exact — no full-scan guessing)
+    // 5. Delete keys gone from the feed (exact — no full-scan guessing).
+    // Guard 2 above already capped this at 20% of the DB, so a run reaching
+    // here is within the safe deletion range.
     if (toDeleteProp.length) counters.deleted += await deleteKeys('property', toDeleteProp);
     if (toDeleteGrid.length) await deleteKeys('grid', toDeleteGrid);
 
     const mins = ((Date.now() - t0) / 60000).toFixed(1);
     console.log('\n✅ Replication sync complete');
-    console.log(`  New: ${counters.added}, Changed: ${counters.updated}, Deleted: ${counters.deleted}`);
-    console.log(`  Full records fetched: ${counters.fetched} (vs ${identifiers.length} identifiers)`);
+    console.log(`  New: ${counters.added}, Changed: ${counters.updated}, Deleted: ${counters.deleted}, Orphans repaired: ${counters.orphans}`);
+    console.log(`  Full records fetched: ${counters.fetched} (vs ${toFetch.length} requested)${counters.fetchFailed ? `, ${counters.fetchFailed} individual fetches failed (stale rows will retry next run)` : ''}`);
     console.log(`  Took ${mins} min`);
     process.exit(0);
   } catch (e) {
