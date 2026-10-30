@@ -23,3 +23,11 @@ jobs:
           DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
           DDF_CLIENT_SECRET: ${{ secrets.DDF_CLIENT_SECRET }}
           FULL_SYNC: 'false'
+      # Refresh the pre-computed stats tables (hood_stats, city_stats) right
+      # after the data changes, so city/hood pages read one indexed row
+      # instead of aggregating. Runs only if the sync above succeeded; the
+      # site falls back to the RPCs if this step ever fails.
+      - name: Refresh pre-computed stats tables
+        run: node update-stats.js
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
