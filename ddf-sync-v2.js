@@ -320,6 +320,8 @@ function mapForGrid(properties, officeDetails) {
       PostalCode: p.Address?.PostalCode || p.PostalCode || null,
       Latitude: p.Latitude,
       Longitude: p.Longitude,
+      CityRegion: p.CityRegion,
+      SubdivisionName: p.SubdivisionName,
       ParkingTotal: p.ParkingTotal,
       BathroomsTotalInteger: p.BathroomsTotalInteger,
       BedroomsTotal: p.BedroomsTotal,
@@ -330,6 +332,9 @@ function mapForGrid(properties, officeDetails) {
 }
 // NOTE: mapForGrid now includes ModificationTimestamp. Run once before switching:
 //   alter table grid add column if not exists "ModificationTimestamp" text;
+// NOTE (Nov 6 2026): mapForGrid now also includes CityRegion + SubdivisionName
+// (neighbourhood pages read grid for the hood filter). Columns + backfill
+// already done on grid — no further SQL needed for these two.
 
 async function upsertBatch(table, rows) {
   for (let i = 0; i < rows.length; i += UPSERT_BATCH_SIZE) {
