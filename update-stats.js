@@ -118,14 +118,38 @@ async function upsertAll(table, rows, onConflict) {
   }
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isStatementTimeout(error) {
+  const text = `${error?.code ?? ''} ${error?.message ?? ''}`.toLowerCase();
+  return text.includes('57014') || text.includes('statement timeout');
+}
+
+// Fetch one page of the scan. A statement timeout (57014) on a single
+// page is a transient IO spike on the free-plan DB — most often right
+// after the sync step's write burst — not a bad query. Back off and
+// retry the same page (5s, 10s, 15s) instead of failing the whole run.
+// Any other error still fails fast, exactly as before.
+async function fetchPage(table, cols, lastKey) {
+  for (let attempt = 1; ; attempt++) {
+    let q = supabase.from(table).select(cols).order('ListingKey', { ascending: true }).limit(1000);
+    if (lastKey) q = q.gt('ListingKey', lastKey);
+    const { data, error } = await q;
+    if (!error) return data;
+    if (!isStatementTimeout(error) || attempt >= 4) {
+      throw new Error(`${table} scan failed: ${error.message}`);
+    }
+    const waitMs = attempt * 5000;
+    console.warn(`update-stats: ${table} page after ${lastKey ?? 'start'} timed out (attempt ${attempt}); retrying in ${waitMs / 1000}s`);
+    await sleep(waitMs);
+  }
+}
+
 async function pageScan(table, cols, onRow) {
   let lastKey = null;
   let scanned = 0;
   while (true) {
-    let q = supabase.from(table).select(cols).order('ListingKey', { ascending: true }).limit(1000);
-    if (lastKey) q = q.gt('ListingKey', lastKey);
-    const { data, error } = await q;
-    if (error) throw new Error(`${table} scan failed: ${error.message}`);
+    const data = await fetchPage(table, cols, lastKey);
     if (!data || !data.length) break;
     for (const row of data) {
       scanned += 1;
