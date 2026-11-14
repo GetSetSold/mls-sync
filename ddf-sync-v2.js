@@ -109,6 +109,36 @@ async function fetchReplicationIdentifiers() {
 // =====================
 // 2. Scan DB keys + their stored ModificationTimestamp (property table has it)
 // =====================
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Both timeout shapes the free-plan DB produces under IO load: Postgres
+// cancelling the statement (57014 / "statement timeout") and the Supabase
+// gateway giving up on the response ("upstream request timeout").
+function isTransientDbTimeout(error) {
+  const text = `${error?.code ?? ''} ${error?.message ?? ''}`.toLowerCase();
+  return text.includes('57014') || text.includes('statement timeout') || text.includes('upstream request timeout');
+}
+
+// Fetch one page of the DB scan. A timeout on a single page is a transient
+// IO spike, not a bad query — back off and retry the same page (5s, 10s,
+// 15s) instead of aborting the whole sync. The scan is read-only and
+// keyset-paginated, so a retry resumes at the exact same page. Any other
+// error still fails fast, exactly as before.
+async function fetchDbPage(table, cols, lastKey) {
+  for (let attempt = 1; ; attempt++) {
+    let q = supabase.from(table).select(cols).order('ListingKey', { ascending: true }).limit(DB_SCAN_BATCH);
+    if (lastKey !== null) q = q.gt('ListingKey', lastKey);
+    const { data, error } = await q;
+    if (!error) return data;
+    if (!isTransientDbTimeout(error) || attempt >= 4) {
+      throw new Error(`DB scan failed for ${table}: ${error.message}`);
+    }
+    const waitMs = attempt * 5000;
+    console.warn(`ddf-sync: ${table} scan page after ${lastKey ?? 'start'} timed out (attempt ${attempt}); retrying in ${waitMs / 1000}s`);
+    await sleep(waitMs);
+  }
+}
+
 async function fetchDbState(table, withTimestamp) {
   // Keyset pagination (not OFFSET): each batch reads only its own rows via the
   // ListingKey index instead of re-scanning from the start every time.
@@ -117,10 +147,7 @@ async function fetchDbState(table, withTimestamp) {
   const map = new Map();
   let lastKey = null;
   while (true) {
-    let q = supabase.from(table).select(cols).order('ListingKey', { ascending: true }).limit(DB_SCAN_BATCH);
-    if (lastKey !== null) q = q.gt('ListingKey', lastKey);
-    const { data, error } = await q;
-    if (error) throw new Error(`DB scan failed for ${table}: ${error.message}`);
+    const data = await fetchDbPage(table, cols, lastKey);
     if (!data || data.length === 0) break;
     for (const r of data) {
       map.set(r.ListingKey, withTimestamp ? (r.ModificationTimestamp || null) : true);
